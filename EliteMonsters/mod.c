@@ -1,5 +1,7 @@
 #include "mod_core.h"
 #include "mod_logger.h"
+#include "tefkernel/patchlib/type.h"
+#include "tefkernel/patchlib/method.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -73,11 +75,33 @@ static int elite_should_spawn(int world_mode) {
     return random_percent() < g_spawn_chance_percent[world_mode];
 }
 
+/* Resolve the game-side spawn entry point at runtime.  Terraria's IL2CPP
+ * metadata uses overloads, so keep this discovery separate from the hook
+ * implementation and report every candidate we can safely inspect. */
+static void discover_spawn_api(void) {
+    patch_handle_t npc = patchlib_type_get_type("Terraria", "NPC");
+    if (!npc || !patchlib_is_valid(npc)) {
+        mod_logger_write(MOD_LOG_LEVEL_WARNING, "EliteMonsters",
+                         "NPC type not found; spawn hook deferred");
+        return;
+    }
+    const char *names[] = { "NewNPC", "SpawnNPC", "SetDefaults" };
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        patch_handle_t method = patchlib_type_get_method(npc, names[i]);
+        if (method && patchlib_is_valid(method)) {
+            mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
+                             "Spawn API candidate: Terraria.NPC.%s (params=%d)",
+                             names[i], patchlib_method_get_param_count(method));
+        }
+    }
+}
+
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
     srand(0x454C4954u);
     mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
-                     "Loaded Android MVP; NPC spawn hook pending API mapping");
+                     "Loaded Android MVP; resolving NPC spawn API");
+    discover_spawn_api();
     (void)elite_should_spawn;
     (void)make_profile;
 }
