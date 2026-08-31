@@ -3,11 +3,14 @@
 #include "tefkernel/patchlib/type.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
+#include "tefkernel/patchlib/struct/string.h"
 
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 void (*mod_logger_write)(mod_log_level_t level, const char* tag, const char* fmt, ...) = NULL;
 
@@ -50,6 +53,7 @@ static const int g_spawn_chance_percent[5] = {100, 100, 100, 100, 100};
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
 static size_t g_setdefaults_hook_count = 0;
+static patch_hook_id_t g_full_name_hook = PATCH_HOOK_INVALID_ID;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
 
@@ -58,6 +62,8 @@ static unsigned long g_elite_count = 0;
 #define PROCESSED_INSTANCE_LIMIT 1024
 static void *g_processed_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_processed_instance_count = 0;
+static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
+static size_t g_elite_instance_count = 0;
 
 static patch_handle_t g_main_game_mode_field = NULL;
 static patch_handle_t g_field_type = NULL;
@@ -127,6 +133,22 @@ static void remember_processed(void *instance) {
         /* Reuse the oldest slot rather than growing unboundedly. */
         size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
         g_processed_instances[slot] = instance;
+    }
+}
+
+static bool is_elite_instance(void *instance) {
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (g_elite_instances[i] == instance) return true;
+    }
+    return false;
+}
+
+static void remember_elite_instance(void *instance) {
+    if (!instance || is_elite_instance(instance)) return;
+    if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
+        g_elite_instances[g_elite_instance_count++] = instance;
+    } else {
+        g_elite_instances[g_elite_count % PROCESSED_INSTANCE_LIMIT] = instance;
     }
 }
 
@@ -244,12 +266,43 @@ static void apply_elite_profile(patch_handle_t instance) {
     }
 
     if (changed) {
+        remember_elite_instance(instance);
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "Elite NPC transformed: type=%d rank=%d affixes=0x%X total=%lu",
                   (int)npc_type, (int)profile.rank,
                   (unsigned)profile.affix_mask, g_elite_count);
     }
+}
+
+/* Terraria's MouseText renderer accepts the same color-tag format used by chat:
+ * [c/FF4040:text].  NPC.FullName is the string used by the hover name UI. */
+static void fullname_postfix(patch_handle_t instance, void **args, void *result,
+                             const patch_method_signature_t *sig_info) {
+    (void)args;
+    (void)sig_info;
+    if (!instance || !result || !is_elite_instance(instance)) return;
+
+    patch_handle_t original = *(patch_handle_t *)result;
+    if (!original || !patchlib_is_valid(original)) return;
+    char *name = patchlib_string_cstr(original);
+    if (!name || !name[0]) {
+        free(name);
+        return;
+    }
+    if (strncmp(name, "[c/FF4040:", 11) == 0) {
+        free(name);
+        return;
+    }
+
+    char decorated[512];
+    (void)snprintf(decorated, sizeof(decorated),
+                   "[c/FF4040:【精英】 %s]", name);
+    patch_handle_t replacement = patchlib_string_create(decorated);
+    if (replacement && patchlib_is_valid(replacement)) {
+        *(patch_handle_t *)result = replacement;
+    }
+    free(name);
 }
 
 static void setdefaults_postfix(patch_handle_t instance, void **args, void *result,
@@ -331,12 +384,39 @@ static void discover_spawn_api(void) {
     }
 }
 
+static void discover_name_api(patch_handle_t npc) {
+    patch_handle_t method = patchlib_type_get_method_by_param_count(
+        npc, "get_FullName", 0);
+    if (!method || !patchlib_is_valid(method)) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC.FullName getter was not found; colored name disabled");
+        return;
+    }
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return;
+    if (!sig.is_instance) {
+        patchlib_method_signature_free(&sig);
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC.FullName getter is not an instance method");
+        return;
+    }
+
+    g_full_name_hook = patchlib_install_prepost_hook(method, NULL,
+                                                      fullname_postfix);
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Colored NPC.FullName hook id=%d", (int)g_full_name_hook);
+    patchlib_method_signature_free(&sig);
+}
+
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
     srand(0x454C4954u);
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
               "Loaded Android Hook probe; resolving NPC spawn API");
     discover_spawn_api();
+    patch_handle_t npc = patchlib_type_get_type("Terraria", "NPC");
+    if (npc && patchlib_is_valid(npc)) discover_name_api(npc);
     (void)elite_should_spawn;
     (void)make_profile;
 }
@@ -347,14 +427,18 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_setdefaults_hooks[i]);
     }
     g_setdefaults_hook_count = 0;
+    if (g_full_name_hook != PATCH_HOOK_INVALID_ID) {
+        patchlib_uninstall_hook(g_full_name_hook);
+        g_full_name_hook = PATCH_HOOK_INVALID_ID;
+    }
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083103,
+    .version_code = 2026083104,
     .api_version = 1,
-    .version = "0.4.0"
+    .version = "0.5.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

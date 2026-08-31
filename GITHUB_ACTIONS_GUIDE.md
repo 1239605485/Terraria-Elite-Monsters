@@ -7,7 +7,7 @@
 5. 在运行结果底部下载 `EliteMonsters-android-arm64-installable` 工件。
 6. 将下载得到的 ZIP 导入 TEFManager，确认安装的是 0.4.0 测试修复版。
 
-本版本的旅途、经典、专家、大师、传奇模式概率均为 100%。测试完成后，将 `EliteMonsters/mod.c` 中的概率数组改回正式值并重新运行 Actions：
+本版本的旅途、经典、专家、大师、传奇模式概率均为 100%，鼠标悬停精英怪时名称会显示红色“【精英】”标识。测试完成后，将 `EliteMonsters/mod.c` 中的概率数组改回正式值并重新运行 Actions：
 
 ```c
 static const int g_spawn_chance_percent[5] = {2, 5, 10, 15, 20};

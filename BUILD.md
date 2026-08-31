@@ -1,4 +1,4 @@
-# EliteMonsters 0.4.0（100% 概率测试修复版）
+# EliteMonsters 0.5.0（100% 概率和彩色名称测试版）
 
 This revision connects the existing `Terraria.NPC.SetDefaults` hook to the
 elite profile generator. It filters friendly/town/boss/inactive NPCs, applies
