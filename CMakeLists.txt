@@ -1,7 +1,17 @@
 cmake_minimum_required(VERSION 3.22.1)
-
-project("EliteMonsters")
-
-add_terraria_mod(EliteMonsters
-        mod.c
-)
+project("Terraria-KernelLoader-Mods")
+set(CMAKE_C_STANDARD 11)
+include_directories(${CMAKE_SOURCE_DIR}/mod-api)
+macro(add_terraria_mod MOD_NAME)
+  add_library(${MOD_NAME} SHARED ${CMAKE_SOURCE_DIR}/mod-api/tefkernel/tef_api_imp.c ${ARGN})
+  if(ANDROID)
+    set(_sys android)
+    set(_arch arm64)
+  else()
+    set(_sys linux)
+    set(_arch x64)
+  endif()
+  set_target_properties(${MOD_NAME} PROPERTIES OUTPUT_NAME "${MOD_NAME}.${_sys}.${_arch}")
+  target_include_directories(${MOD_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/mod-api)
+endmacro()
+add_subdirectory(EliteMonsters)
