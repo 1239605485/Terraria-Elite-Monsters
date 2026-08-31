@@ -1,4 +1,4 @@
-# EliteMonsters 1.2.2（liuxin 四档难度与进度奖励版）
+# EliteMonsters 1.2.3 正式版（liuxin 四档难度与进度奖励版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat

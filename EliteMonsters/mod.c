@@ -132,9 +132,9 @@ static const elite_mode_modifier_t g_mode_modifiers[ELITE_MODE_COUNT] = {
     {"传奇", 1.60f, 1.45f, 12, 1.08f, 0.70f, 3.25f}
 };
 
-/* 正式配置：按普通、专家、大师、传奇顺序排列，统一为 20%。 */
+/* 正式配置：按普通、专家、大师、传奇顺序排列，每档递增 10%。 */
 static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
-    20, 20, 20, 20
+    20, 30, 40, 50
 };
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
@@ -2012,9 +2012,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090103,
+    .version_code = 2026090104,
     .api_version = 1,
-    .version = "1.2.3"
+    .version = "1.2.4"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

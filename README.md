@@ -1,16 +1,17 @@
-# Elite Monsters
+# Elite Monsters（正式版）
 
-## 1.2.3 更新
+## 1.2.4 更新
 
 - 修复 Terraria 复用 NPC 对象槽位后，旧精英身份和“已发放奖励”状态残留，导致后续传奇精英死亡时跳过宝匣判定的问题。
 - 每次 `NPC.SetDefaults` 完成时都会开始一个新的 NPC 生命周期，并重置该槽位的精英、AI 和奖励状态。
 - 传奇精英现在必掉 1 个宝匣：困难模式前 70% 金匣、困难模式后 70% 钛金匣，另有 30% 按击杀时目标玩家当前环境选择环境匣。
-- 四档精英生成概率统一调整为 20%。
+- 精英生成概率按难度递增：普通 20%、专家 30%、大师 40%、传奇 50%。
+- 当前版本已标记为正式版：稳定验证 `stableVerified=true`，实验标记 `experimental=false`。
 
 一个运行于 Terraria Android ARM64 的分级精英怪模组。
 
 作者：**liuxin**  
-当前版本：**1.2.2**
+当前版本：**1.2.4**
 
 ## 模组功能
 
@@ -64,7 +65,7 @@ Elite Monsters 会将符合条件的普通敌怪转化为精英怪，让探索�
 - 同一个 NPC 实例不会被重复强化。
 - 金币奖励完全使用 Terraria 原版金币机制。
 - 本版本不添加自定义物品或虚构材料；稀有奖励和环境匣全部使用 Terraria 原版物品。
-- 当前源码默认将四档游戏模式的精英生成概率统一设置为 20%。
+- 当前源码按难度递增设置精英生成概率：普通 20%、专家 30%、大师 40%、传奇 50%。
 - 游戏进度通过困难模式、机械 Boss、世纪之花、石巨人和月亮领主进度判断。
 
 ## 生成概率
@@ -73,7 +74,7 @@ Elite Monsters 会将符合条件的普通敌怪转化为精英怪，让探索�
 
 ```c
 static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
-    20, 20, 20, 20
+    20, 30, 40, 50
 };
 ```
 
@@ -137,7 +138,7 @@ Kernel runtime started successfully
 
 如果只看到 TEFKernel 启动成功，但没有 `Initialized 1 mods successfully`，通常需要检查模组是否启用、安装包是否完整，以及 GitHub Actions 是否编译出了 ARM64 动态库。
 
-1.2.2 会优先直接获取当前游戏的 `Terraria.NPC.AI()`，并让 TEFKernel
+1.2.3 会优先直接获取当前游戏的 `Terraria.NPC.AI()`，并让 TEFKernel
 直接校验和安装这个已确认的主方法；获取失败时再枚举实际 AI 方法。
 同时应看到奖励 Hook、原版物品生成 API 和进度字段已找到：
 
