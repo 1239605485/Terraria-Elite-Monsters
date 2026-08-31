@@ -103,6 +103,7 @@ static size_t g_mouse_text_hook_count = 0;
 #define AI_HOOK_LIMIT 1
 static patch_hook_id_t g_ai_hooks[AI_HOOK_LIMIT];
 static size_t g_ai_hook_count = 0;
+static int g_ai_method_token = -1;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
 
@@ -685,27 +686,45 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
 }
 
 static void discover_ai_api(patch_handle_t npc) {
-    patch_handle_t method = patchlib_type_get_method_by_param_count(npc, "AI", 0);
-    if (!method || !patchlib_is_valid(method)) return;
+    /* Different Terraria/IL2CPP builds expose the same behavior under AI,
+     * AI_007, or another numbered AI method, and overload metadata can vary.
+     * Try the public name first, then the common numbered forms and parameter
+     * counts. Only an instance void method is accepted. */
+    static const char *const names[] = {
+        "AI", "AI_007", "AI_008", "AI_009", "AI_013", "AI_019",
+        "AI_021", "AI_025", "AI_027", "AI_028", "AI_029", "AI_030",
+        "AI_031", "AI_032", "AI_033"
+    };
 
-    patch_method_signature_t sig = {0};
-    if (!patchlib_method_get_signature(method, &sig)) return;
-    if (!sig.is_instance || sig.return_type != PATCH_VOID) {
-        patchlib_method_signature_free(&sig);
-        return;
-    }
+    for (size_t name_index = 0;
+         name_index < sizeof(names) / sizeof(names[0]); ++name_index) {
+        for (int args_count = 0; args_count <= 2; ++args_count) {
+            patch_handle_t method = patchlib_type_get_method_by_param_count(
+                npc, names[name_index], args_count);
+            if (!method || !patchlib_is_valid(method)) continue;
 
-    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-        method, NULL, ai_postfix);
-    if (hook_id != PATCH_HOOK_INVALID_ID) {
-        g_ai_hooks[g_ai_hook_count++] = hook_id;
-        ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "NPC AI enhancement hook installed: id=%d", (int)hook_id);
-    } else {
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "NPC AI enhancement hook failed");
+            patch_method_signature_t sig = {0};
+            if (!patchlib_method_get_signature(method, &sig)) continue;
+            bool supported = sig.is_instance && sig.return_type == PATCH_VOID;
+            int token = supported ? patchlib_method_get_token(method) : -1;
+            patchlib_method_signature_free(&sig);
+            if (!supported || token == g_ai_method_token) continue;
+
+            patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+                method, NULL, ai_postfix);
+            if (hook_id != PATCH_HOOK_INVALID_ID &&
+                g_ai_hook_count < AI_HOOK_LIMIT) {
+                g_ai_hooks[g_ai_hook_count++] = hook_id;
+                g_ai_method_token = token;
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "NPC AI enhancement hook installed: name=%s params=%d id=%d",
+                          names[name_index], args_count, (int)hook_id);
+                return;
+            }
+        }
     }
-    patchlib_method_signature_free(&sig);
+    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+              "NPC AI enhancement hook not found in this game build");
 }
 
 static void init_mod(kernel_mod_handle_t* handle) {
@@ -750,9 +769,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083110,
+    .version_code = 2026083111,
     .api_version = 1,
-    .version = "1.0.0"
+    .version = "1.0.1"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
