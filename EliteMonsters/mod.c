@@ -686,43 +686,84 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
 }
 
 static void discover_ai_api(patch_handle_t npc) {
-    /* Different Terraria/IL2CPP builds expose the same behavior under AI,
-     * AI_007, or another numbered AI method, and overload metadata can vary.
-     * Try the public name first, then the common numbered forms and parameter
-     * counts. Only an instance void method is accepted. */
-    static const char *const names[] = {
-        "AI", "AI_007", "AI_008", "AI_009", "AI_013", "AI_019",
-        "AI_021", "AI_025", "AI_027", "AI_028", "AI_029", "AI_030",
-        "AI_031", "AI_032", "AI_033"
-    };
+    /* Method names differ between Terraria IL2CPP exports. In particular,
+     * some builds expose NPC AI as AI_007 instead of AI, and parameter-count
+     * lookup can miss methods whose metadata is renamed. Enumerate the actual
+     * method table first, then choose the best supported instance void method
+     * whose name starts with AI. */
+    tefstd_vector_t methods = {0};
+    if (!patchlib_type_get_methods(npc, true, &methods)) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC AI method enumeration failed");
+        return;
+    }
 
-    for (size_t name_index = 0;
-         name_index < sizeof(names) / sizeof(names[0]); ++name_index) {
-        for (int args_count = 0; args_count <= 2; ++args_count) {
-            patch_handle_t method = patchlib_type_get_method_by_param_count(
-                npc, names[name_index], args_count);
-            if (!method || !patchlib_is_valid(method)) continue;
+    patch_handle_t selected_method = NULL;
+    const char *selected_name = NULL;
+    int selected_params = -1;
+    int selected_token = -1;
+    int selected_score = INT_MAX;
+    size_t method_count = tefstd_vector_size(&methods);
 
-            patch_method_signature_t sig = {0};
-            if (!patchlib_method_get_signature(method, &sig)) continue;
-            bool supported = sig.is_instance && sig.return_type == PATCH_VOID;
-            int token = supported ? patchlib_method_get_token(method) : -1;
-            patchlib_method_signature_free(&sig);
-            if (!supported || token == g_ai_method_token) continue;
+    for (size_t i = 0; i < method_count; ++i) {
+        patch_handle_t *entry = (patch_handle_t *)tefstd_vector_at(&methods, i);
+        patch_handle_t method = entry ? *entry : NULL;
+        if (!method || !patchlib_is_valid(method)) continue;
 
-            patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-                method, NULL, ai_postfix);
-            if (hook_id != PATCH_HOOK_INVALID_ID &&
-                g_ai_hook_count < AI_HOOK_LIMIT) {
-                g_ai_hooks[g_ai_hook_count++] = hook_id;
-                g_ai_method_token = token;
-                ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                          "NPC AI enhancement hook installed: name=%s params=%d id=%d",
-                          names[name_index], args_count, (int)hook_id);
-                return;
-            }
+        const char *name = patchlib_method_get_name(method);
+        if (!name || strncmp(name, "AI", 2) != 0) continue;
+
+        int params = patchlib_method_get_param_count(method);
+        patch_method_signature_t sig = {0};
+        if (!patchlib_method_get_signature(method, &sig)) continue;
+
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "NPC AI candidate: name=%s params=%d instance=%d return=%d",
+                  name, params, sig.is_instance ? 1 : 0,
+                  (int)sig.return_type);
+
+        bool supported = sig.is_instance && sig.return_type == PATCH_VOID &&
+                         params <= 2;
+        int token = supported ? patchlib_method_get_token(method) : -1;
+        patchlib_method_signature_free(&sig);
+        if (!supported || token < 0) continue;
+
+        int score = 100;
+        if (strcmp(name, "AI") == 0) {
+            score = 0;
+        } else if (strncmp(name, "AI_", 3) == 0) {
+            score = 10;
+        }
+        if (params != 0) score += 1;
+
+        if (score < selected_score) {
+            selected_method = method;
+            selected_name = name;
+            selected_params = params;
+            selected_token = token;
+            selected_score = score;
         }
     }
+
+    if (selected_method && selected_token != g_ai_method_token) {
+        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+            selected_method, NULL, ai_postfix);
+        if (hook_id != PATCH_HOOK_INVALID_ID &&
+            g_ai_hook_count < AI_HOOK_LIMIT) {
+            g_ai_hooks[g_ai_hook_count++] = hook_id;
+            g_ai_method_token = selected_token;
+            ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                      "NPC AI enhancement hook installed: name=%s params=%d id=%d",
+                      selected_name, selected_params, (int)hook_id);
+            tefstd_vector_destroy(&methods);
+            return;
+        }
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC AI enhancement hook failed: name=%s params=%d",
+                  selected_name, selected_params);
+    }
+
+    tefstd_vector_destroy(&methods);
     ELITE_LOG(MOD_LOG_LEVEL_WARNING,
               "NPC AI enhancement hook not found in this game build");
 }
@@ -764,14 +805,15 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_ai_hooks[i]);
     }
     g_ai_hook_count = 0;
+    g_ai_method_token = -1;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083111,
+    .version_code = 2026083112,
     .api_version = 1,
-    .version = "1.0.1"
+    .version = "1.0.2"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

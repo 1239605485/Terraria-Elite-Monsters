@@ -3,7 +3,7 @@
 一个运行于 Terraria Android ARM64 的分级精英怪模组。
 
 作者：**liuxin**  
-当前版本：**1.0.1**
+当前版本：**1.0.2**
 
 ## 模组功能
 
@@ -113,3 +113,13 @@ Kernel runtime started successfully
 ```
 
 如果只看到 TEFKernel 启动成功，但没有 `Initialized 1 mods successfully`，通常需要检查模组是否启用、安装包是否完整，以及 GitHub Actions 是否编译出了 ARM64 动态库。
+
+1.0.2 还会枚举当前游戏 `Terraria.NPC` 的实际 AI 方法，并优先 Hook
+`AI` 或 `AI_*` 实例方法。日志中应看到类似：
+
+```text
+NPC AI candidate: name=AI_007 params=0 instance=1 return=0
+NPC AI enhancement hook installed: name=AI_007 params=0 id=...
+```
+
+如果没有找到 AI 方法，模组仍会正常加载，但只使用属性、名称和原版颜色功能。

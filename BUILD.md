@@ -1,4 +1,4 @@
-# EliteMonsters 1.0.0（liuxin AI强化精英怪版）
+# EliteMonsters 1.0.2（liuxin AI强化精英怪版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -36,4 +36,6 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package.
+installable package. Version 1.0.2 enumerates the actual NPC AI methods at
+startup and hooks the best compatible `AI`/`AI_*` method instead of relying on
+hard-coded overload names.
