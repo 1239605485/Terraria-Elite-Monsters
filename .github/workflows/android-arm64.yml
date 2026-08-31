@@ -1,1 +1,48 @@
-.github/workflows/android-arm64.yml
+name: Build EliteMonsters Android ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'EliteMonsters/**'
+      - '.github/workflows/android-arm64.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+      - name: Install NDK 26.3
+        uses: android-actions/setup-ndk@v3
+        id: ndk
+        with:
+          ndk-version: 26.3.11579264
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24
+
+      - name: Build
+        run: cmake --build build --config Release --target EliteMonsters -j2
+
+      - name: Assemble mod package
+        run: |
+          mkdir -p package/Resources/lib
+          cp EliteMonsters/Manifest.json package/Manifest.json
+          cp EliteMonsters/Info.json package/Info.json
+          cp EliteMonsters/EliteMonsters.json package/EliteMonsters.json
+          cp build/EliteMonsters/libEliteMonsters.android.arm64.so package/Resources/lib/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: EliteMonsters-android-arm64
+          path: package
