@@ -63,27 +63,27 @@ static const elite_profile_t g_progress_profiles[5][3] = {
     {
         {ELITE_NORMAL, 1.40f, 1.15f, 4, 1.05f, 1.10f, 2.0f, 0},
         {ELITE_RARE, 2.00f, 1.40f, 8, 1.12f, 1.18f, 4.0f, 0},
-        {ELITE_LEGENDARY, 3.00f, 1.80f, 12, 1.20f, 1.28f, 8.0f, 0}
+        {ELITE_LEGENDARY, 3.00f, 1.80f, 12, 1.20f, 1.28f, 10.0f, 0}
     },
     {
         {ELITE_NORMAL, 1.70f, 1.35f, 8, 1.08f, 1.12f, 3.0f, 0},
         {ELITE_RARE, 2.60f, 1.80f, 15, 1.18f, 1.22f, 6.0f, 0},
-        {ELITE_LEGENDARY, 4.20f, 2.40f, 24, 1.30f, 1.35f, 12.0f, 0}
+        {ELITE_LEGENDARY, 4.20f, 2.40f, 24, 1.30f, 1.35f, 15.0f, 0}
     },
     {
         {ELITE_NORMAL, 2.00f, 1.55f, 12, 1.10f, 1.14f, 4.0f, 0},
         {ELITE_RARE, 3.40f, 2.15f, 22, 1.22f, 1.28f, 8.0f, 0},
-        {ELITE_LEGENDARY, 5.50f, 3.00f, 36, 1.38f, 1.42f, 16.0f, 0}
+        {ELITE_LEGENDARY, 5.50f, 3.00f, 36, 1.38f, 1.42f, 20.0f, 0}
     },
     {
         {ELITE_NORMAL, 2.40f, 1.80f, 18, 1.12f, 1.16f, 5.0f, 0},
         {ELITE_RARE, 4.20f, 2.60f, 32, 1.28f, 1.32f, 10.0f, 0},
-        {ELITE_LEGENDARY, 7.00f, 3.80f, 52, 1.50f, 1.48f, 20.0f, 0}
+        {ELITE_LEGENDARY, 7.00f, 3.80f, 52, 1.50f, 1.48f, 25.0f, 0}
     },
     {
         {ELITE_NORMAL, 3.00f, 2.10f, 26, 1.15f, 1.18f, 6.0f, 0},
         {ELITE_RARE, 5.50f, 3.20f, 45, 1.32f, 1.38f, 12.0f, 0},
-        {ELITE_LEGENDARY, 9.00f, 4.80f, 75, 1.60f, 1.58f, 25.0f, 0}
+        {ELITE_LEGENDARY, 9.00f, 4.80f, 75, 1.60f, 1.58f, 30.0f, 0}
     }
 };
 
@@ -104,8 +104,12 @@ static size_t g_mouse_text_hook_count = 0;
 static patch_hook_id_t g_ai_hooks[AI_HOOK_LIMIT];
 static size_t g_ai_hook_count = 0;
 static int g_ai_method_token = -1;
+#define LOOT_HOOK_LIMIT 1
+static patch_hook_id_t g_loot_hooks[LOOT_HOOK_LIMIT];
+static size_t g_loot_hook_count = 0;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
+static unsigned long g_legendary_reward_count = 0;
 
 /* SetDefaults can be called more than once for the same object.  Keep a
  * bounded pointer set so a transformed NPC is not multiplied repeatedly. */
@@ -116,15 +120,25 @@ static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
+static void *g_rewarded_instances[PROCESSED_INSTANCE_LIMIT];
+static size_t g_rewarded_instance_count = 0;
+
+/* Terraria 1.4 item IDs from the target game's ItemID table. These are both
+ * original Terraria items; no custom item or custom material is introduced. */
+#define ITEM_GOLDEN_CRATE 2336
+#define ITEM_GOLDEN_CRATE_HARD 3981
 
 static patch_handle_t g_main_game_mode_field = NULL;
 static patch_handle_t g_main_hard_mode_field = NULL;
+static patch_handle_t g_main_net_mode_field = NULL;
+static patch_handle_t g_item_new_item_method = NULL;
 static patch_handle_t g_npc_downed_mech_field = NULL;
 static patch_handle_t g_npc_downed_plant_field = NULL;
 static patch_handle_t g_npc_downed_golem_field = NULL;
 static patch_handle_t g_npc_downed_moonlord_field = NULL;
 static patch_handle_t g_main_my_player_field = NULL;
 static patch_handle_t g_field_type = NULL;
+static patch_handle_t g_field_position = NULL;
 static patch_handle_t g_field_life = NULL;
 static patch_handle_t g_field_life_max = NULL;
 static patch_handle_t g_field_damage = NULL;
@@ -236,6 +250,23 @@ static elite_rank_t elite_rank_for_instance(void *instance) {
     return ELITE_NORMAL;
 }
 
+static bool already_rewarded(void *instance) {
+    for (size_t i = 0; i < g_rewarded_instance_count; ++i) {
+        if (g_rewarded_instances[i] == instance) return true;
+    }
+    return false;
+}
+
+static void remember_rewarded(void *instance) {
+    if (!instance || already_rewarded(instance)) return;
+    if (g_rewarded_instance_count < PROCESSED_INSTANCE_LIMIT) {
+        g_rewarded_instances[g_rewarded_instance_count++] = instance;
+    } else {
+        size_t slot = g_legendary_reward_count % PROCESSED_INSTANCE_LIMIT;
+        g_rewarded_instances[slot] = instance;
+    }
+}
+
 static elite_profile_t make_profile(elite_progress_t progress) {
     if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
         progress = PROGRESS_PRE_HARDMODE;
@@ -308,6 +339,75 @@ static const char *progress_name(elite_progress_t progress) {
         return names[0];
     }
     return names[progress];
+}
+
+typedef struct elite_vector2_t {
+    float x;
+    float y;
+} elite_vector2_t;
+
+static bool read_npc_position(patch_handle_t instance, int32_t *x, int32_t *y) {
+    if (!instance || !x || !y ||
+        !valid_field(g_field_position, PATCH_POINTER) ||
+        patchlib_field_get_size(g_field_position) != sizeof(elite_vector2_t)) {
+        return false;
+    }
+
+    elite_vector2_t position = {0.0f, 0.0f};
+    patchlib_field_get_value(g_field_position, instance, &position);
+    *x = (int32_t)position.x;
+    *y = (int32_t)position.y;
+    return true;
+}
+
+static int legendary_reward_item(elite_progress_t progress) {
+    /* Before hardmode, give the original Golden Crate. From hardmode onward,
+     * give the original hardmode Golden Crate (Titanium Crate). */
+    return progress == PROGRESS_PRE_HARDMODE
+               ? ITEM_GOLDEN_CRATE
+               : ITEM_GOLDEN_CRATE_HARD;
+}
+
+static bool reward_drop_allowed(void) {
+    int32_t net_mode = 0; /* 0=single player, 1=multiplayer client, 2=server */
+    if (!read_i32(g_main_net_mode_field, NULL, &net_mode)) return true;
+    return net_mode != 1;
+}
+
+static bool spawn_vanilla_reward(patch_handle_t instance, int item_type,
+                                 int item_stack) {
+    if (!instance || item_type <= 0 || item_stack <= 0 ||
+        !g_item_new_item_method || !patchlib_is_valid(g_item_new_item_method)) {
+        return false;
+    }
+
+    int32_t x = 0;
+    int32_t y = 0;
+    if (!read_npc_position(instance, &x, &y)) return false;
+
+    int32_t width = 0;
+    int32_t height = 0;
+    (void)read_i32(g_field_width, instance, &width);
+    (void)read_i32(g_field_height, instance, &height);
+    if (width < 0) width = 0;
+    if (height < 0) height = 0;
+
+    int32_t type = (int32_t)item_type;
+    int32_t stack = (int32_t)item_stack;
+    bool no_broadcast = false;
+    int32_t prefix = 0;
+    bool no_grab_delay = false;
+    int32_t spawned_item = -1;
+    void *args[9] = {
+        &x, &y, &width, &height, &type,
+        &stack, &no_broadcast, &prefix, &no_grab_delay
+    };
+
+    if (!patchlib_method_invoke_args(g_item_new_item_method, PATCH_NULL,
+                                     &spawned_item, args)) {
+        return false;
+    }
+    return spawned_item >= 0;
 }
 
 static void apply_elite_profile(patch_handle_t instance) {
@@ -402,6 +502,37 @@ static void apply_elite_profile(patch_handle_t instance) {
     }
 }
 
+/* NPCLoot runs after Terraria has processed the original loot. Legendary
+ * elites add one progression-appropriate vanilla crate on top of that loot.
+ * The instance guard prevents a repeated NPCLoot call from duplicating it. */
+static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
+                             const patch_method_signature_t *sig_info) {
+    (void)args;
+    (void)result;
+    (void)sig_info;
+    if (!instance || !is_elite_instance(instance) ||
+        elite_rank_for_instance(instance) != ELITE_LEGENDARY ||
+        already_rewarded(instance)) {
+        return;
+    }
+
+    remember_rewarded(instance);
+    if (!reward_drop_allowed()) return;
+
+    elite_progress_t progress = current_progress();
+    int item_type = legendary_reward_item(progress);
+    if (spawn_vanilla_reward(instance, item_type, 1)) {
+        ++g_legendary_reward_count;
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Legendary vanilla reward dropped: item=%d progress=%s total=%lu",
+                  item_type, progress_name(progress), g_legendary_reward_count);
+    } else {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Legendary reward could not be spawned: item=%d progress=%s",
+                  item_type, progress_name(progress));
+    }
+}
+
 /* Add a visible marker at the NPC name source. The MouseText hook below also
  * applies a rank-specific vanilla rarity directly, so this works even when the Android build
  * does not parse [c/...] tags in the NPC hover renderer. */
@@ -456,6 +587,7 @@ static void setdefaults_postfix(patch_handle_t instance, void **args, void *resu
 
 static void cache_npc_fields(patch_handle_t npc) {
     g_field_type = patchlib_type_get_field(npc, "type");
+    g_field_position = patchlib_type_get_field(npc, "position");
     g_field_life = patchlib_type_get_field(npc, "life");
     g_field_life_max = patchlib_type_get_field(npc, "lifeMax");
     g_field_damage = patchlib_type_get_field(npc, "damage");
@@ -483,6 +615,7 @@ static void cache_npc_fields(patch_handle_t npc) {
         if (!g_main_hard_mode_field || !patchlib_is_valid(g_main_hard_mode_field)) {
             g_main_hard_mode_field = patchlib_type_get_field(main_type, "HardMode");
         }
+        g_main_net_mode_field = patchlib_type_get_field(main_type, "netMode");
         g_main_my_player_field = patchlib_type_get_field(main_type, "myPlayer");
     }
 
@@ -543,6 +676,70 @@ static void discover_spawn_api(void) {
         }
         patchlib_method_signature_free(&sig);
     }
+}
+
+static void discover_reward_api(patch_handle_t npc, patch_handle_t item_type) {
+    patch_handle_t loot = patchlib_type_get_method_by_param_count(
+        npc, "NPCLoot", 0);
+    if (loot && patchlib_is_valid(loot)) {
+        patch_method_signature_t loot_sig = {0};
+        if (patchlib_method_get_signature(loot, &loot_sig)) {
+            bool loot_supported = loot_sig.is_instance &&
+                                  loot_sig.return_type == PATCH_VOID &&
+                                  tefstd_vector_size(&loot_sig.arg_types) == 0;
+            if (loot_supported) {
+                patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+                    loot, NULL, npc_loot_postfix);
+                if (hook_id != PATCH_HOOK_INVALID_ID &&
+                    g_loot_hook_count < LOOT_HOOK_LIMIT) {
+                    g_loot_hooks[g_loot_hook_count++] = hook_id;
+                    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                              "NPC.NPCLoot reward hook installed: id=%d",
+                              (int)hook_id);
+                } else {
+                    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                              "NPC.NPCLoot reward hook failed");
+                }
+            } else {
+                ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                          "NPC.NPCLoot signature is not supported");
+            }
+            patchlib_method_signature_free(&loot_sig);
+        }
+    } else {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC.NPCLoot method not found; legendary crate reward disabled");
+    }
+
+    g_item_new_item_method = patchlib_type_get_method_by_param_count(
+        item_type, "NewItem", 9);
+    if (!g_item_new_item_method || !patchlib_is_valid(g_item_new_item_method)) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Item.NewItem(X,Y,Width,Height,Type,Stack,...) not found; legendary crate reward disabled");
+        g_item_new_item_method = NULL;
+        return;
+    }
+
+    patch_method_signature_t item_sig = {0};
+    if (!patchlib_method_get_signature(g_item_new_item_method, &item_sig)) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Item.NewItem signature unavailable; legendary crate reward disabled");
+        g_item_new_item_method = NULL;
+        return;
+    }
+
+    bool item_supported = !item_sig.is_instance &&
+                          item_sig.return_type == PATCH_INT32 &&
+                          tefstd_vector_size(&item_sig.arg_types) == 9;
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Item.NewItem reward API: found=%d static=%d return=%d params=%d positionField=%d netModeField=%d",
+              item_supported ? 1 : 0, item_sig.is_instance ? 0 : 1,
+              (int)item_sig.return_type,
+              (int)tefstd_vector_size(&item_sig.arg_types),
+              valid_field(g_field_position, PATCH_POINTER) ? 1 : 0,
+              valid_field(g_main_net_mode_field, PATCH_INT32) ? 1 : 0);
+    patchlib_method_signature_free(&item_sig);
+    if (!item_supported) g_item_new_item_method = NULL;
 }
 
 static void discover_name_api(patch_handle_t npc) {
@@ -844,6 +1041,15 @@ static void init_mod(kernel_mod_handle_t* handle) {
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
         discover_mouse_text_api(main_type);
+        if (npc && patchlib_is_valid(npc)) {
+            patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
+            if (item_type && patchlib_is_valid(item_type)) {
+                discover_reward_api(npc, item_type);
+            } else {
+                ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                          "Terraria.Item type not found; legendary crate reward disabled");
+            }
+        }
     }
     (void)elite_should_spawn;
     (void)make_profile;
@@ -868,14 +1074,25 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     }
     g_ai_hook_count = 0;
     g_ai_method_token = -1;
+    for (size_t i = 0; i < g_loot_hook_count; ++i) {
+        patchlib_uninstall_hook(g_loot_hooks[i]);
+    }
+    g_loot_hook_count = 0;
+    g_item_new_item_method = NULL;
+    g_processed_instance_count = 0;
+    g_elite_instance_count = 0;
+    g_rewarded_instance_count = 0;
+    g_setdefaults_calls = 0;
+    g_elite_count = 0;
+    g_legendary_reward_count = 0;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083114,
+    .version_code = 2026083115,
     .api_version = 1,
-    .version = "1.0.4"
+    .version = "1.0.5"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
