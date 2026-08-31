@@ -27,6 +27,14 @@ typedef enum elite_rank_t {
     ELITE_LEGENDARY = 5
 } elite_rank_t;
 
+typedef enum elite_progress_t {
+    PROGRESS_PRE_HARDMODE,
+    PROGRESS_HARDMODE_EARLY,
+    PROGRESS_PRE_PLANTERA,
+    PROGRESS_POST_PLANTERA,
+    PROGRESS_ENDGAME
+} elite_progress_t;
+
 typedef enum elite_affix_t {
     AFFIX_FLAME,
     AFFIX_FROST,
@@ -40,11 +48,44 @@ typedef struct elite_profile_t {
     elite_rank_t rank;
     float health_multiplier;
     float damage_multiplier;
-    float defense_multiplier;
-    float speed_multiplier;
+    int32_t defense_bonus;
     float scale_multiplier;
+    float knockback_multiplier;
+    float gold_multiplier;
     uint32_t affix_mask;
 } elite_profile_t;
+
+/* Final values are selected from both world progress and elite rank.  This
+ * keeps early-game elites reasonable while allowing late-game elites to stay
+ * threatening. Defense is additive so low-defense enemies still receive a
+ * meaningful increase. */
+static const elite_profile_t g_progress_profiles[5][3] = {
+    {
+        {ELITE_NORMAL, 1.40f, 1.15f, 4, 1.05f, 1.10f, 2.0f, 0},
+        {ELITE_RARE, 2.00f, 1.40f, 8, 1.12f, 1.18f, 4.0f, 0},
+        {ELITE_LEGENDARY, 3.00f, 1.80f, 12, 1.20f, 1.28f, 8.0f, 0}
+    },
+    {
+        {ELITE_NORMAL, 1.70f, 1.35f, 8, 1.08f, 1.12f, 3.0f, 0},
+        {ELITE_RARE, 2.60f, 1.80f, 15, 1.18f, 1.22f, 6.0f, 0},
+        {ELITE_LEGENDARY, 4.20f, 2.40f, 24, 1.30f, 1.35f, 12.0f, 0}
+    },
+    {
+        {ELITE_NORMAL, 2.00f, 1.55f, 12, 1.10f, 1.14f, 4.0f, 0},
+        {ELITE_RARE, 3.40f, 2.15f, 22, 1.22f, 1.28f, 8.0f, 0},
+        {ELITE_LEGENDARY, 5.50f, 3.00f, 36, 1.38f, 1.42f, 16.0f, 0}
+    },
+    {
+        {ELITE_NORMAL, 2.40f, 1.80f, 18, 1.12f, 1.16f, 5.0f, 0},
+        {ELITE_RARE, 4.20f, 2.60f, 32, 1.28f, 1.32f, 10.0f, 0},
+        {ELITE_LEGENDARY, 7.00f, 3.80f, 52, 1.50f, 1.48f, 20.0f, 0}
+    },
+    {
+        {ELITE_NORMAL, 3.00f, 2.10f, 26, 1.15f, 1.18f, 6.0f, 0},
+        {ELITE_RARE, 5.50f, 3.20f, 45, 1.32f, 1.38f, 12.0f, 0},
+        {ELITE_LEGENDARY, 9.00f, 4.80f, 75, 1.60f, 1.58f, 25.0f, 0}
+    }
+};
 
 /* 测试配置：按旅途、经典、专家、大师、传奇顺序排列，全部提高到 100%。
  * 这样每个符合条件的普通敌怪都会尝试转化为精英怪，方便验证功能。
@@ -59,6 +100,9 @@ static size_t g_npc_name_hook_count = 0;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
 static size_t g_mouse_text_hook_count = 0;
+#define AI_HOOK_LIMIT 1
+static patch_hook_id_t g_ai_hooks[AI_HOOK_LIMIT];
+static size_t g_ai_hook_count = 0;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
 
@@ -69,9 +113,16 @@ static void *g_processed_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_processed_instance_count = 0;
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
+static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
 
 static patch_handle_t g_main_game_mode_field = NULL;
+static patch_handle_t g_main_hard_mode_field = NULL;
+static patch_handle_t g_npc_downed_mech_field = NULL;
+static patch_handle_t g_npc_downed_plant_field = NULL;
+static patch_handle_t g_npc_downed_golem_field = NULL;
+static patch_handle_t g_npc_downed_moonlord_field = NULL;
+static patch_handle_t g_main_my_player_field = NULL;
 static patch_handle_t g_field_type = NULL;
 static patch_handle_t g_field_life = NULL;
 static patch_handle_t g_field_life_max = NULL;
@@ -85,6 +136,11 @@ static patch_handle_t g_field_value = NULL;
 static patch_handle_t g_field_friendly = NULL;
 static patch_handle_t g_field_town_npc = NULL;
 static patch_handle_t g_field_boss = NULL;
+static patch_handle_t g_field_target = NULL;
+static patch_handle_t g_field_direction = NULL;
+static patch_handle_t g_field_no_gravity = NULL;
+static patch_handle_t g_field_velocity = NULL;
+static bool g_progress_fields_logged = false;
 
 static int random_percent(void) {
     return rand() % 100;
@@ -150,16 +206,25 @@ static bool is_elite_instance(void *instance) {
     return false;
 }
 
+static size_t elite_instance_index(void *instance) {
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (g_elite_instances[i] == instance) return i;
+    }
+    return PROCESSED_INSTANCE_LIMIT;
+}
+
 static void remember_elite_instance(void *instance, elite_rank_t rank) {
     if (!instance || is_elite_instance(instance)) return;
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
         g_elite_instances[g_elite_instance_count] = instance;
         g_elite_ranks[g_elite_instance_count] = rank;
+        g_elite_ai_ticks[g_elite_instance_count] = 0;
         ++g_elite_instance_count;
     } else {
         size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
         g_elite_instances[slot] = instance;
         g_elite_ranks[slot] = rank;
+        g_elite_ai_ticks[slot] = 0;
     }
 }
 
@@ -170,29 +235,24 @@ static elite_rank_t elite_rank_for_instance(void *instance) {
     return ELITE_NORMAL;
 }
 
-static elite_profile_t make_profile(int world_mode) {
-    /* Every world mode can roll all three ranks. The separate spawn chance
-     * still controls whether an NPC becomes elite at all. */
-    elite_profile_t p = { ELITE_NORMAL, 1.50f, 1.25f, 1.10f, 1.05f, 1.10f, 0 };
-    int roll = random_percent();
+static elite_profile_t make_profile(elite_progress_t progress) {
+    if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
+        progress = PROGRESS_PRE_HARDMODE;
+    }
 
-    (void)world_mode;
-    if (roll < 5) {
-        p.rank = ELITE_LEGENDARY;
-        p.health_multiplier = 5.0f;
-        p.damage_multiplier = 2.50f;
-        p.defense_multiplier = 1.60f;
-        p.speed_multiplier = 1.45f;
-        p.scale_multiplier = 1.50f;
+    int rank_roll = random_percent();
+    size_t rank_index = 0;
+    if (rank_roll < 5) {
+        rank_index = 2;
+    } else if (rank_roll < 30) {
+        rank_index = 1;
+    }
+
+    elite_profile_t p = g_progress_profiles[progress][rank_index];
+    if (p.rank == ELITE_LEGENDARY) {
         p.affix_mask = (1u << AFFIX_ABYSSAL) | (1u << AFFIX_ENRAGED) |
                        (1u << AFFIX_FLAME) | (1u << AFFIX_SPLIT);
-    } else if (roll < 30) {
-        p.rank = ELITE_RARE;
-        p.health_multiplier = 2.5f;
-        p.damage_multiplier = 1.75f;
-        p.defense_multiplier = 1.30f;
-        p.speed_multiplier = 1.20f;
-        p.scale_multiplier = 1.25f;
+    } else if (p.rank == ELITE_RARE) {
         p.affix_mask = (1u << (random_percent() % 5)) |
                        (1u << (random_percent() % 5));
     } else {
@@ -218,6 +278,37 @@ static int current_world_mode(void) {
     return (int)mode;
 }
 
+static elite_progress_t current_progress(void) {
+    bool hard_mode = false;
+    bool downed_mech = false;
+    bool downed_plant = false;
+    bool downed_golem = false;
+    bool downed_moonlord = false;
+
+    (void)read_bool(g_main_hard_mode_field, NULL, &hard_mode);
+    (void)read_bool(g_npc_downed_mech_field, NULL, &downed_mech);
+    (void)read_bool(g_npc_downed_plant_field, NULL, &downed_plant);
+    (void)read_bool(g_npc_downed_golem_field, NULL, &downed_golem);
+    (void)read_bool(g_npc_downed_moonlord_field, NULL, &downed_moonlord);
+
+    if (downed_moonlord) return PROGRESS_ENDGAME;
+    if (downed_plant || downed_golem) return PROGRESS_POST_PLANTERA;
+    if (downed_mech) return PROGRESS_PRE_PLANTERA;
+    if (hard_mode) return PROGRESS_HARDMODE_EARLY;
+    return PROGRESS_PRE_HARDMODE;
+}
+
+static const char *progress_name(elite_progress_t progress) {
+    static const char *names[5] = {
+        "pre-hardmode", "hardmode-early", "pre-plantera",
+        "post-plantera", "endgame"
+    };
+    if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
+        return names[0];
+    }
+    return names[progress];
+}
+
 static void apply_elite_profile(patch_handle_t instance) {
     if (!instance || already_processed(instance)) return;
 
@@ -239,7 +330,8 @@ static void apply_elite_profile(patch_handle_t instance) {
     remember_processed(instance);
     if (!elite_should_spawn(current_world_mode())) return;
 
-    elite_profile_t profile = make_profile(current_world_mode());
+    elite_progress_t progress = current_progress();
+    elite_profile_t profile = make_profile(progress);
     int32_t life = life_max;
     (void)read_i32(g_field_life, instance, &life);
 
@@ -257,8 +349,9 @@ static void apply_elite_profile(patch_handle_t instance) {
 
     int32_t defense = 0;
     if (read_i32(g_field_defense, instance, &defense)) {
-        int32_t adjusted = (int32_t)((double)defense * profile.defense_multiplier);
+        int64_t adjusted = (int64_t)defense + profile.defense_bonus;
         if (adjusted < 0) adjusted = 0;
+        if (adjusted > INT32_MAX) adjusted = INT32_MAX;
         changed |= write_i32(g_field_defense, instance, adjusted);
     }
 
@@ -266,7 +359,7 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (valid_field(g_field_knockback_resist, PATCH_FLOAT)) {
         patchlib_field_get_value(g_field_knockback_resist, instance, &knockback);
         changed |= write_float(g_field_knockback_resist, instance,
-                               knockback * profile.defense_multiplier);
+                               knockback * profile.knockback_multiplier);
     }
 
     int32_t width = 0;
@@ -291,11 +384,8 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (valid_field(g_field_value, PATCH_FLOAT)) {
         float value = 0.0f;
         patchlib_field_get_value(g_field_value, instance, &value);
-        float reward_multiplier = 2.0f;
-        if (profile.rank == ELITE_RARE) reward_multiplier = 5.0f;
-        if (profile.rank == ELITE_LEGENDARY) reward_multiplier = 10.0f;
         changed |= write_float(g_field_value, instance,
-                               value * reward_multiplier);
+                               value * profile.gold_multiplier);
     }
 
     /* Keep the instance marked even if a field is unavailable in this game
@@ -304,8 +394,9 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Elite NPC transformed: type=%d rank=%d affixes=0x%X total=%lu",
-                  (int)npc_type, (int)profile.rank,
+                  "Elite NPC transformed: type=%d progress=%s rank=%d gold=%.1fx affixes=0x%X total=%lu",
+                  (int)npc_type, progress_name(progress), (int)profile.rank,
+                  (double)profile.gold_multiplier,
                   (unsigned)profile.affix_mask, g_elite_count);
     }
 }
@@ -376,6 +467,10 @@ static void cache_npc_fields(patch_handle_t npc) {
     g_field_friendly = patchlib_type_get_field(npc, "friendly");
     g_field_town_npc = patchlib_type_get_field(npc, "townNPC");
     g_field_boss = patchlib_type_get_field(npc, "boss");
+    g_field_target = patchlib_type_get_field(npc, "target");
+    g_field_direction = patchlib_type_get_field(npc, "direction");
+    g_field_no_gravity = patchlib_type_get_field(npc, "noGravity");
+    g_field_velocity = patchlib_type_get_field(npc, "velocity");
 
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
@@ -383,6 +478,27 @@ static void cache_npc_fields(patch_handle_t npc) {
         if (!g_main_game_mode_field || !patchlib_is_valid(g_main_game_mode_field)) {
             g_main_game_mode_field = patchlib_type_get_field(main_type, "gameMode");
         }
+        g_main_hard_mode_field = patchlib_type_get_field(main_type, "hardMode");
+        if (!g_main_hard_mode_field || !patchlib_is_valid(g_main_hard_mode_field)) {
+            g_main_hard_mode_field = patchlib_type_get_field(main_type, "HardMode");
+        }
+        g_main_my_player_field = patchlib_type_get_field(main_type, "myPlayer");
+    }
+
+    g_npc_downed_mech_field = patchlib_type_get_field(npc, "downedMechBossAny");
+    g_npc_downed_plant_field = patchlib_type_get_field(npc, "downedPlantBoss");
+    g_npc_downed_golem_field = patchlib_type_get_field(npc, "downedGolemBoss");
+    g_npc_downed_moonlord_field = patchlib_type_get_field(npc, "downedMoonlord");
+
+    if (!g_progress_fields_logged) {
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Progress fields: hardMode=%d mech=%d plant=%d golem=%d moonlord=%d",
+                  g_main_hard_mode_field != NULL,
+                  g_npc_downed_mech_field != NULL,
+                  g_npc_downed_plant_field != NULL,
+                  g_npc_downed_golem_field != NULL,
+                  g_npc_downed_moonlord_field != NULL);
+        g_progress_fields_logged = true;
     }
 }
 
@@ -522,6 +638,76 @@ static void discover_mouse_text_api(patch_handle_t main_type) {
     }
 }
 
+/* AI enhancement layer. The original NPC.AI runs first; this postfix only
+ * improves target selection and gives rare/legendary elites a cooldown-based
+ * dash. If velocity is not exposed as a safe 8-byte Vector2 field on a game
+ * build, target locking remains active and the dash is skipped. */
+static void ai_postfix(patch_handle_t instance, void **args, void *result,
+                       const patch_method_signature_t *sig_info) {
+    (void)args;
+    (void)result;
+    (void)sig_info;
+    if (!instance || !is_elite_instance(instance)) return;
+
+    size_t index = elite_instance_index(instance);
+    if (index >= PROCESSED_INSTANCE_LIMIT) return;
+    ++g_elite_ai_ticks[index];
+
+    int32_t player = -1;
+    if (read_i32(g_main_my_player_field, NULL, &player) && player >= 0) {
+        (void)write_i32(g_field_target, instance, player);
+    }
+
+    elite_rank_t rank = g_elite_ranks[index];
+    if (rank == ELITE_NORMAL) return;
+    uint32_t dash_interval = rank == ELITE_LEGENDARY ? 90u : 150u;
+    if (g_elite_ai_ticks[index] % dash_interval != 0u) return;
+
+#if defined(__ANDROID__)
+    if (!valid_field(g_field_velocity, PATCH_OBJECT) ||
+        patchlib_field_get_size(g_field_velocity) != 8u) {
+        return;
+    }
+    float *velocity = (float *)patchlib_field_get_pointer(g_field_velocity,
+                                                           instance);
+    if (!velocity) return;
+
+    int32_t direction = 1;
+    (void)read_i32(g_field_direction, instance, &direction);
+    if (direction == 0) direction = 1;
+    float dash_speed = rank == ELITE_LEGENDARY ? 8.0f : 6.0f;
+    velocity[0] = direction > 0 ? dash_speed : -dash_speed;
+
+    bool no_gravity = true;
+    (void)read_bool(g_field_no_gravity, instance, &no_gravity);
+    if (!no_gravity && velocity[1] > -6.0f) velocity[1] = -6.0f;
+#endif
+}
+
+static void discover_ai_api(patch_handle_t npc) {
+    patch_handle_t method = patchlib_type_get_method_by_param_count(npc, "AI", 0);
+    if (!method || !patchlib_is_valid(method)) return;
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return;
+    if (!sig.is_instance || sig.return_type != PATCH_VOID) {
+        patchlib_method_signature_free(&sig);
+        return;
+    }
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, ai_postfix);
+    if (hook_id != PATCH_HOOK_INVALID_ID) {
+        g_ai_hooks[g_ai_hook_count++] = hook_id;
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "NPC AI enhancement hook installed: id=%d", (int)hook_id);
+    } else {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC AI enhancement hook failed");
+    }
+    patchlib_method_signature_free(&sig);
+}
+
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
     srand(0x454C4954u);
@@ -529,7 +715,10 @@ static void init_mod(kernel_mod_handle_t* handle) {
               "Loaded Android Hook probe; resolving NPC spawn API");
     discover_spawn_api();
     patch_handle_t npc = patchlib_type_get_type("Terraria", "NPC");
-    if (npc && patchlib_is_valid(npc)) discover_name_api(npc);
+    if (npc && patchlib_is_valid(npc)) {
+        discover_name_api(npc);
+        discover_ai_api(npc);
+    }
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
         discover_mouse_text_api(main_type);
@@ -552,14 +741,18 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_mouse_text_hooks[i]);
     }
     g_mouse_text_hook_count = 0;
+    for (size_t i = 0; i < g_ai_hook_count; ++i) {
+        patchlib_uninstall_hook(g_ai_hooks[i]);
+    }
+    g_ai_hook_count = 0;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083108,
+    .version_code = 2026083110,
     .api_version = 1,
-    .version = "0.8.0"
+    .version = "1.0.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

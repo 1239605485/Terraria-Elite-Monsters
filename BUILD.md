@@ -1,19 +1,28 @@
-# EliteMonsters 0.8.0（liuxin 分级精英怪版）
+# EliteMonsters 1.0.0（liuxin AI强化精英怪版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
-transformation of the same instance. Eligible enemies roll one of three ranks:
+transformation of the same instance. The profile now also reads world
+progress: pre-hardmode, early hardmode, pre-Plantera, post-Plantera, and
+endgame. Eligible enemies roll one of three ranks at every progress stage:
 
-- normal elite: `精英·怪物`, white name, 1.5x health, 1.25x damage, 1.1x defense;
-- rare elite: `稀有·怪物`, blue name, 2.5x health, 1.75x damage, 1.3x defense;
-- legendary elite: `传奇·怪物`, purple name, 5x health, 2.5x damage, 1.6x defense.
+- normal elite: `精英·怪物`, white name; from 1.4x/1.15x/+4 defense in
+  pre-hardmode to 3x/2.1x/+26 defense in endgame;
+- rare elite: `稀有·怪物`, blue name; from 2x/1.4x/+8 defense to
+  5.5x/3.2x/+45 defense;
+- legendary elite: `传奇·怪物`, purple name; from 3x/1.8x/+12 defense to
+  9x/4.8x/+75 defense.
 
 All three ranks also increase size and knockback resistance. The rank color is
 assigned through the vanilla `Main.MouseText` rarity argument; no `[c/...]`
 markup is written into the NPC name, because the Android build displays that
-markup literally. Vanilla NPC coin values are multiplied by 2 for normal
-elites, 5 for rare elites, and 10 for legendary elites. No custom item or
-non-vanilla material is added in this version.
+markup literally. Vanilla NPC coin values scale with progress from 2/4/8
+in pre-hardmode to 6/12/25 in endgame. No custom item or non-vanilla
+material is added in this version. Version 1.0.0 also hooks the original
+`Terraria.NPC.AI`: all elites more actively keep the local player as target,
+while rare and legendary elites periodically attempt a dash. If a game build
+does not expose a safe `velocity` field, the target enhancement remains active
+and the dash is skipped.
 
 Build the ARM64 package on a machine with CMake and the Android NDK installed:
 
