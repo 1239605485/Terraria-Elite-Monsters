@@ -1,4 +1,4 @@
-# EliteMonsters 1.2.0（liuxin 四档难度与进度奖励版）
+# EliteMonsters 1.2.2（liuxin 四档难度与进度奖励版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -30,9 +30,10 @@ assigned through the vanilla `Main.MouseText` rarity argument; no `[c/...]`
 markup is written into the NPC name, because the Android build displays that
 markup literally. Rare elites add one random original item from the current
 progress tier. Legendary elites have a 30% chance to add one random original
-environment crate; hardmode crate variants are used after hardmode. No custom
-item or non-vanilla material is added in this version.
-Version 1.2.0 also hooks the original `Terraria.NPC.AI` without replacing it.
+environment crate; before hardmode the common branch is a Golden Crate, after
+hardmode it is a Titanium Crate, and the environment branch follows the target
+player's current biome. No custom item or non-vanilla material is added in this
+version. Version 1.2.2 also hooks the original `Terraria.NPC.AI` without replacing it.
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
 lateral repositioning bursts, flyers weave while approaching, worms perform
@@ -55,7 +56,8 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.2.0 directly asks TEFKernel to hook the known
+installable package. Version 1.2.2 directly asks TEFKernel to hook the known
 parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
-rare progress reward and legendary environment-crate reward, and uses the
+rare progress reward and guaranteed legendary crate distribution (70% common,
+30% current-environment), and uses the
 primitive-argument `Item.NewItem` overload to create vanilla items safely.

@@ -177,6 +177,8 @@ static size_t g_elite_instance_count = 0;
 /* Terraria 1.4.5.6.4 ItemID values from the target game's ItemID table.
  * Every reward below is an original Terraria item or environment crate. */
 #define ITEM_LIFE_CRYSTAL 29
+#define ITEM_GOLDEN_CRATE 2336
+#define ITEM_TITANIUM_CRATE 3981
 #define ITEM_MANA_CRYSTAL 109
 #define ITEM_FALLEN_STAR 75
 #define ITEM_MAGIC_MIRROR 50
@@ -316,8 +318,9 @@ static const int32_t g_hardmode_environment_crates[
         ITEM_LAVA_CRATE_HARD, ITEM_OCEAN_CRATE_HARD
     };
 
-/* A 30% chance keeps an environment crate exciting and valuable without
- * making every legendary kill a guaranteed crate farm. */
+/* Legendary elites always drop exactly one crate.  Before hardmode the common
+ * branch is a Golden Crate; after hardmode it is a Titanium Crate. */
+#define LEGENDARY_COMMON_CRATE_CHANCE_PERCENT 70
 #define LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT 30
 
 static patch_handle_t g_main_game_mode_field = NULL;
@@ -357,6 +360,16 @@ static patch_handle_t g_player_width_field = NULL;
 static patch_handle_t g_player_height_field = NULL;
 static patch_handle_t g_player_active_field = NULL;
 static patch_handle_t g_player_dead_field = NULL;
+static patch_handle_t g_player_zone_dungeon_field = NULL;
+static patch_handle_t g_player_zone_corrupt_field = NULL;
+static patch_handle_t g_player_zone_crimson_field = NULL;
+static patch_handle_t g_player_zone_jungle_field = NULL;
+static patch_handle_t g_player_zone_snow_field = NULL;
+static patch_handle_t g_player_zone_desert_field = NULL;
+static patch_handle_t g_player_zone_beach_field = NULL;
+static patch_handle_t g_player_zone_underworld_field = NULL;
+static patch_handle_t g_player_zone_hallow_field = NULL;
+static patch_handle_t g_player_zone_sky_field = NULL;
 static bool g_progress_fields_logged = false;
 
 #define LEGENDARY_ENRAGE_LIFE_PERCENT 35
@@ -718,11 +731,9 @@ static bool read_npc_position(patch_handle_t instance, int32_t *x, int32_t *y) {
     return true;
 }
 
-static bool read_player_state(int32_t player_index, elite_vector2_t *position,
-                              int32_t *width, int32_t *height) {
-    if (player_index < 0 || player_index > 255 || !position ||
-        !g_main_player_field || !patchlib_is_valid(g_main_player_field) ||
-        !g_player_position_field) {
+static bool get_player_instance(int32_t player_index, patch_handle_t *out_player) {
+    if (player_index < 0 || player_index > 255 || !out_player ||
+        !g_main_player_field || !patchlib_is_valid(g_main_player_field)) {
         return false;
     }
 
@@ -738,6 +749,16 @@ static bool read_player_state(int32_t player_index, elite_vector2_t *position,
         !player || !patchlib_is_valid(player)) {
         return false;
     }
+    *out_player = player;
+    return true;
+}
+
+static bool read_player_state(int32_t player_index, elite_vector2_t *position,
+                              int32_t *width, int32_t *height) {
+    if (!position || !g_player_position_field) return false;
+
+    patch_handle_t player = NULL;
+    if (!get_player_instance(player_index, &player)) return false;
 
     bool active = true;
     bool dead = false;
@@ -764,6 +785,14 @@ static bool read_player_state(int32_t player_index, elite_vector2_t *position,
         if (*height <= 0) *height = 40;
     }
     return true;
+}
+
+static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
+    if (!valid_field(field, PATCH_BOOL)) return false;
+    patch_handle_t player = NULL;
+    bool value = false;
+    return get_player_instance(player_index, &player) &&
+           read_bool(field, player, &value) && value;
 }
 
 static int32_t target_player_index(patch_handle_t instance) {
@@ -809,6 +838,49 @@ static int32_t legendary_environment_crate(elite_progress_t progress) {
 
     size_t index = (size_t)(rand() % HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE);
     return g_hardmode_environment_crates[index];
+}
+
+static int32_t current_environment_crate(elite_progress_t progress,
+                                          int32_t player_index) {
+    bool hardmode = progress != PROGRESS_PRE_HARDMODE;
+    if (read_player_zone_flag(player_index, g_player_zone_dungeon_field)) {
+        return hardmode ? ITEM_DUNGEON_CRATE_HARD : ITEM_DUNGEON_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_corrupt_field)) {
+        return hardmode ? ITEM_CORRUPT_CRATE_HARD : ITEM_CORRUPT_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_crimson_field)) {
+        return hardmode ? ITEM_CRIMSON_CRATE_HARD : ITEM_CRIMSON_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_jungle_field)) {
+        return hardmode ? ITEM_JUNGLE_CRATE_HARD : ITEM_JUNGLE_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_snow_field)) {
+        return hardmode ? ITEM_FROZEN_CRATE_HARD : ITEM_FROZEN_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_desert_field)) {
+        return hardmode ? ITEM_OASIS_CRATE_HARD : ITEM_OASIS_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_beach_field)) {
+        return hardmode ? ITEM_OCEAN_CRATE_HARD : ITEM_OCEAN_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_underworld_field)) {
+        return hardmode ? ITEM_LAVA_CRATE_HARD : ITEM_LAVA_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_hallow_field)) {
+        return hardmode ? ITEM_HALLOWED_CRATE_HARD : ITEM_HALLOWED_CRATE;
+    }
+    if (read_player_zone_flag(player_index, g_player_zone_sky_field)) {
+        return hardmode ? ITEM_SKY_CRATE_HARD : ITEM_SKY_CRATE;
+    }
+    /* If the target is unavailable during NPCLoot, retain a vanilla biome
+     * fallback rather than failing the guaranteed one-crate reward. */
+    return legendary_environment_crate(progress);
+}
+
+static int32_t legendary_common_crate(elite_progress_t progress) {
+    return progress == PROGRESS_PRE_HARDMODE ? ITEM_GOLDEN_CRATE
+                                             : ITEM_TITANIUM_CRATE;
 }
 
 static elite_behavior_t detect_behavior(patch_handle_t instance) {
@@ -1008,9 +1080,9 @@ static void apply_elite_profile(patch_handle_t instance) {
 }
 
 /* NPCLoot runs after Terraria has processed the original loot. Rare elites
- * add one random current-progress vanilla item; legendary elites have a 30%
- * chance to add one random environment crate. The instance guard prevents a
- * repeated NPCLoot call from duplicating either reward. */
+ * add one random current-progress vanilla item; legendary elites always add
+ * exactly one crate: a 70% common crate or a 30% environment crate. The
+ * instance guard prevents a repeated NPCLoot call from duplicating rewards. */
 static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
                              const patch_method_signature_t *sig_info) {
     (void)args;
@@ -1046,26 +1118,28 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
         return;
     }
 
-    if (random_percent() >= LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT) {
-        ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Legendary environment crate missed: chance=%d%% progress=%s",
-                  LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT,
-                  progress_name(progress));
-        return;
+    int32_t item_type = 0;
+    const char *crate_kind = NULL;
+    int roll = random_percent();
+    if (roll < LEGENDARY_COMMON_CRATE_CHANCE_PERCENT) {
+        item_type = legendary_common_crate(progress);
+        crate_kind = progress == PROGRESS_PRE_HARDMODE ? "golden" : "titanium";
+    } else {
+        item_type = current_environment_crate(progress, target_player_index(instance));
+        crate_kind = "environment";
     }
-
-    int32_t item_type = legendary_environment_crate(progress);
     if (spawn_vanilla_reward(instance, item_type, 1)) {
         ++g_legendary_reward_count;
         ELITE_LOG(
             MOD_LOG_LEVEL_INFO,
-            "Legendary environment crate dropped: item=%d chance=%d%% progress=%s total=%lu",
-            (int)item_type, LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT,
-            progress_name(progress), g_legendary_reward_count);
+            "Legendary crate dropped: kind=%s item=%d distribution=%d%%/%d%% progress=%s total=%lu",
+            crate_kind, (int)item_type, LEGENDARY_COMMON_CRATE_CHANCE_PERCENT,
+            LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT, progress_name(progress),
+            g_legendary_reward_count);
     } else {
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Legendary environment crate could not be spawned: item=%d progress=%s",
-                  (int)item_type, progress_name(progress));
+                  "Legendary crate could not be spawned: kind=%s item=%d progress=%s",
+                  crate_kind, (int)item_type, progress_name(progress));
     }
 }
 
@@ -1189,6 +1263,16 @@ static void cache_npc_fields(patch_handle_t npc) {
         g_player_height_field = patchlib_type_get_field(player_type, "height");
         g_player_active_field = patchlib_type_get_field(player_type, "active");
         g_player_dead_field = patchlib_type_get_field(player_type, "dead");
+        g_player_zone_dungeon_field = patchlib_type_get_field(player_type, "ZoneDungeon");
+        g_player_zone_corrupt_field = patchlib_type_get_field(player_type, "ZoneCorrupt");
+        g_player_zone_crimson_field = patchlib_type_get_field(player_type, "ZoneCrimson");
+        g_player_zone_jungle_field = patchlib_type_get_field(player_type, "ZoneJungle");
+        g_player_zone_snow_field = patchlib_type_get_field(player_type, "ZoneSnow");
+        g_player_zone_desert_field = patchlib_type_get_field(player_type, "ZoneDesert");
+        g_player_zone_beach_field = patchlib_type_get_field(player_type, "ZoneBeach");
+        g_player_zone_underworld_field = patchlib_type_get_field(player_type, "ZoneUnderworldHeight");
+        g_player_zone_hallow_field = patchlib_type_get_field(player_type, "ZoneHallow");
+        g_player_zone_sky_field = patchlib_type_get_field(player_type, "ZoneSkyHeight");
     }
 
     g_npc_downed_mech_field = patchlib_type_get_field(npc, "downedMechBossAny");
@@ -1930,9 +2014,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090101,
+    .version_code = 2026090102,
     .api_version = 1,
-    .version = "1.2.1"
+    .version = "1.2.2"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
