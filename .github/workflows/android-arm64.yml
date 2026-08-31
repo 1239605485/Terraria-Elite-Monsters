@@ -51,8 +51,10 @@ jobs:
           cp "$LIB" package/Resources/lib/libEliteMonsters.android.arm64.so
           (cd package && zip -r ../EliteMonsters-android-arm64.zip .)
 
-      - name: Upload artifacts
+      - name: Upload installable mod package
         uses: actions/upload-artifact@v4
         with:
-          name: EliteMonsters-android-arm64
-          path: EliteMonsters-android-arm64.zip
+          name: EliteMonsters-android-arm64-installable
+          # Upload the package directory itself so the downloaded artifact
+          # opens directly with Manifest.json at its root (no nested ZIP).
+          path: package/**
