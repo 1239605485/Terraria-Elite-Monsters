@@ -80,6 +80,7 @@ static patch_handle_t g_field_knockback_resist = NULL;
 static patch_handle_t g_field_width = NULL;
 static patch_handle_t g_field_height = NULL;
 static patch_handle_t g_field_scale = NULL;
+static patch_handle_t g_field_value = NULL;
 static patch_handle_t g_field_friendly = NULL;
 static patch_handle_t g_field_town_npc = NULL;
 static patch_handle_t g_field_boss = NULL;
@@ -270,6 +271,18 @@ static void apply_elite_profile(patch_handle_t instance) {
                                scale * profile.scale_multiplier);
     }
 
+    /* Vanilla NPC.value controls the normal coin drop. Keep the reward
+     * entirely vanilla while making higher elite ranks worth more. */
+    if (valid_field(g_field_value, PATCH_FLOAT)) {
+        float value = 0.0f;
+        patchlib_field_get_value(g_field_value, instance, &value);
+        float reward_multiplier = 2.0f;
+        if (profile.rank == ELITE_RARE) reward_multiplier = 5.0f;
+        if (profile.rank == ELITE_LEGENDARY) reward_multiplier = 10.0f;
+        changed |= write_float(g_field_value, instance,
+                               value * reward_multiplier);
+    }
+
     /* Keep the instance marked even if a field is unavailable in this game
      * build. The name and drawing hooks still need to identify the NPC. */
     remember_elite_instance(instance);
@@ -304,8 +317,10 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
     }
 
     char decorated[512];
+    /* Do not put [c/...] into the NPC name: this Android build displays the
+     * tag literally. Main.MouseText applies the red color separately. */
     (void)snprintf(decorated, sizeof(decorated),
-                   "[c/FF4040:【精英】 %s]", name);
+                   "【精英】 %s", name);
     patch_handle_t replacement = patchlib_string_create(decorated);
     if (replacement && patchlib_is_valid(replacement)) {
         *(patch_handle_t *)result = replacement;
@@ -337,6 +352,7 @@ static void cache_npc_fields(patch_handle_t npc) {
     g_field_width = patchlib_type_get_field(npc, "width");
     g_field_height = patchlib_type_get_field(npc, "height");
     g_field_scale = patchlib_type_get_field(npc, "scale");
+    g_field_value = patchlib_type_get_field(npc, "value");
     g_field_friendly = patchlib_type_get_field(npc, "friendly");
     g_field_town_npc = patchlib_type_get_field(npc, "townNPC");
     g_field_boss = patchlib_type_get_field(npc, "boss");
@@ -514,9 +530,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083105,
+    .version_code = 2026083107,
     .api_version = 1,
-    .version = "0.6.0"
+    .version = "0.7.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

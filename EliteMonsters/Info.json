@@ -1,10 +1,10 @@
 {
   "pkgId": "eternal.future.elitemonsters",
   "name": "Elite Monsters（精英怪·红色名称修复版）",
-  "version": "0.6.0",
-  "versionCode": 2026083105,
+  "version": "0.7.0",
+  "versionCode": 2026083107,
   "author": "YourName",
-  "brieflyDescribe": "修复版：符合条件的普通敌怪 100% 进化，名称带有精英标识并在悬停绘制入口强制使用红色。",
+  "brieflyDescribe": "奖励版：去除名称颜色代码，精英标识显示为红色，并按精英等级提高原版金币奖励。",
   "description": "精英怪 MOD：让 Terraria 的每一次探索，都可能遇到一场意想不到的小型 Boss 战。",
   "features": [],
   "sizeCategory": "TINY",
