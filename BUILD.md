@@ -1,4 +1,4 @@
-# EliteMonsters 1.0.5（liuxin AI强化与原版奖励版）
+# EliteMonsters 1.1.0（liuxin 传奇AI强化与原版奖励版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -13,18 +13,24 @@ endgame. Eligible enemies roll one of three ranks at every progress stage:
 - legendary elite: `传奇·怪物`, purple name; from 3x/1.8x/+12 defense to
   9x/4.8x/+75 defense.
 
-All three ranks also increase size and knockback resistance. The rank color is
+Normal and rare ranks also increase size and knockback resistance. Legendary
+elites are completely immune to knockback. The rank color is
 assigned through the vanilla `Main.MouseText` rarity argument; no `[c/...]`
 markup is written into the NPC name, because the Android build displays that
 markup literally. Vanilla NPC coin values scale with progress from 2/4/10
 in pre-hardmode to 6/12/30 in endgame. A legendary elite additionally drops
 one original Golden Crate before hardmode or Golden Crate Hard (Titanium Crate)
 after hardmode. No custom item or non-vanilla material is added in this version.
-Version 1.0.5 also hooks the original
-`Terraria.NPC.AI`: all elites more actively keep the local player as target,
-while rare and legendary elites periodically attempt a dash. If a game build
-does not expose a safe `velocity` field, the target enhancement remains active
-and the dash is skipped.
+Version 1.1.0 also hooks the original `Terraria.NPC.AI` without replacing it.
+All elites keep the local player as target. Legendary melee/charger enemies
+can teleport to the player's side on a cooldown, ranged/caster enemies make
+lateral repositioning bursts, flyers weave while approaching, worms perform
+diagonal ambush bursts, and special enemies use evasive movement. Legendary
+elites enter a one-time enrage below 35% life, increasing their contact damage
+by 25%. Movement is authoritative on single-player/server; multiplayer
+clients do not duplicate teleports. If a game build does not expose a safe
+`velocity`, `position`, or `Main.player` field, the affected movement is
+skipped while the rest of the mod remains active.
 
 Build the ARM64 package on a machine with CMake and the Android NDK installed:
 
@@ -38,7 +44,7 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.0.5 directly asks TEFKernel to hook the known
+installable package. Version 1.1.0 directly asks TEFKernel to hook the known
 parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
 legendary crate reward, and uses the primitive-argument `Item.NewItem` overload
 to create the vanilla item safely.

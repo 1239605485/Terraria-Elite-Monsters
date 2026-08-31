@@ -3,6 +3,7 @@
 #include "tefkernel/patchlib/type.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
+#include "tefkernel/patchlib/struct/array.h"
 #include "tefkernel/patchlib/struct/string.h"
 
 #include <limits.h>
@@ -43,6 +44,17 @@ typedef enum elite_affix_t {
     AFFIX_ENRAGED,
     AFFIX_ABYSSAL
 } elite_affix_t;
+
+/* The vanilla AI style gives us a stable, game-side way to choose a
+ * movement pattern without replacing the NPC's original attack logic. */
+typedef enum elite_behavior_t {
+    ELITE_BEHAVIOR_MELEE,
+    ELITE_BEHAVIOR_CHARGER,
+    ELITE_BEHAVIOR_RANGED,
+    ELITE_BEHAVIOR_FLYING,
+    ELITE_BEHAVIOR_WORM,
+    ELITE_BEHAVIOR_SPECIAL
+} elite_behavior_t;
 
 typedef struct elite_profile_t {
     elite_rank_t rank;
@@ -118,7 +130,10 @@ static void *g_processed_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_processed_instance_count = 0;
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
+static elite_behavior_t g_elite_behaviors[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
+static int32_t g_elite_base_damage[PROCESSED_INSTANCE_LIMIT];
+static bool g_elite_enraged[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
 static void *g_rewarded_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_rewarded_instance_count = 0;
@@ -131,6 +146,7 @@ static size_t g_rewarded_instance_count = 0;
 static patch_handle_t g_main_game_mode_field = NULL;
 static patch_handle_t g_main_hard_mode_field = NULL;
 static patch_handle_t g_main_net_mode_field = NULL;
+static patch_handle_t g_main_player_field = NULL;
 static patch_handle_t g_item_new_item_method = NULL;
 static patch_handle_t g_npc_downed_mech_field = NULL;
 static patch_handle_t g_npc_downed_plant_field = NULL;
@@ -152,10 +168,22 @@ static patch_handle_t g_field_friendly = NULL;
 static patch_handle_t g_field_town_npc = NULL;
 static patch_handle_t g_field_boss = NULL;
 static patch_handle_t g_field_target = NULL;
+static patch_handle_t g_field_ai_style = NULL;
 static patch_handle_t g_field_direction = NULL;
+static patch_handle_t g_field_net_update = NULL;
 static patch_handle_t g_field_no_gravity = NULL;
 static patch_handle_t g_field_velocity = NULL;
+static patch_handle_t g_player_position_field = NULL;
+static patch_handle_t g_player_width_field = NULL;
+static patch_handle_t g_player_height_field = NULL;
+static patch_handle_t g_player_active_field = NULL;
+static patch_handle_t g_player_dead_field = NULL;
 static bool g_progress_fields_logged = false;
+
+#define LEGENDARY_ENRAGE_LIFE_PERCENT 35
+#define LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER 1.25f
+#define LEGENDARY_TELEPORT_DISTANCE 480.0f
+#define LEGENDARY_TELEPORT_OFFSET 96.0f
 
 static int random_percent(void) {
     return rand() % 100;
@@ -172,28 +200,129 @@ static bool valid_field(patch_handle_t field, patch_type_t type) {
     return field && patchlib_is_valid(field) && patchlib_field_get_type(field) == type;
 }
 
-static bool read_i32(patch_handle_t field, patch_handle_t instance, int32_t *out) {
-    if (!out || !valid_field(field, PATCH_INT32)) return false;
+static bool get_field_value(patch_handle_t field, patch_handle_t instance,
+                            void *out) {
+    if (!field || !out || !patchlib_is_valid(field)) return false;
+
+#if defined(__ANDROID__)
+    /* TEFKernel's Android field helper historically handled const/thread
+     * static fields specially, but not every ordinary static field. Use its
+     * real static-data pointer here so Main.gameMode, Main.player, and the
+     * other static Terraria fields are read reliably. */
+    if (!instance && (patchlib_field_is_const(field) ||
+                      patchlib_field_is_thread_static(field))) {
+        patchlib_field_get_value(field, instance, out);
+        return true;
+    }
+    if (!instance && patchlib_field_is_static(field)) {
+        void *raw = patchlib_field_get_pointer(field, NULL);
+        if (!raw) return false;
+        memcpy(out, raw, patchlib_field_get_size(field));
+        return true;
+    }
+#endif
+
     patchlib_field_get_value(field, instance, out);
     return true;
+}
+
+static bool set_field_value(patch_handle_t field, patch_handle_t instance,
+                            void *value) {
+    if (!field || !value || !patchlib_is_valid(field)) return false;
+
+#if defined(__ANDROID__)
+    if (!instance && (patchlib_field_is_const(field) ||
+                      patchlib_field_is_thread_static(field))) {
+        return false;
+    }
+    if (!instance && patchlib_field_is_static(field)) {
+        void *raw = patchlib_field_get_pointer(field, NULL);
+        if (!raw) return false;
+        memcpy(raw, value, patchlib_field_get_size(field));
+        return true;
+    }
+#endif
+
+    patchlib_field_set_value(field, instance, value);
+    return true;
+}
+
+static bool read_i32(patch_handle_t field, patch_handle_t instance, int32_t *out) {
+    if (!out || !valid_field(field, PATCH_INT32)) return false;
+    return get_field_value(field, instance, out);
 }
 
 static bool read_bool(patch_handle_t field, patch_handle_t instance, bool *out) {
     if (!out || !valid_field(field, PATCH_BOOL)) return false;
-    patchlib_field_get_value(field, instance, out);
-    return true;
+    return get_field_value(field, instance, out);
 }
 
 static bool write_i32(patch_handle_t field, patch_handle_t instance, int32_t value) {
     if (!valid_field(field, PATCH_INT32)) return false;
-    patchlib_field_set_value(field, instance, &value);
-    return true;
+    return set_field_value(field, instance, &value);
 }
 
 static bool write_float(patch_handle_t field, patch_handle_t instance, float value) {
     if (!valid_field(field, PATCH_FLOAT)) return false;
-    patchlib_field_set_value(field, instance, &value);
-    return true;
+    return set_field_value(field, instance, &value);
+}
+
+static bool write_bool(patch_handle_t field, patch_handle_t instance, bool value) {
+    if (!valid_field(field, PATCH_BOOL)) return false;
+    return set_field_value(field, instance, &value);
+}
+
+typedef struct elite_vector2_t {
+    float x;
+    float y;
+} elite_vector2_t;
+
+static bool valid_vector2_field(patch_handle_t field) {
+    if (!field || !patchlib_is_valid(field) ||
+        patchlib_field_get_size(field) != sizeof(elite_vector2_t)) {
+        return false;
+    }
+
+    patch_type_t type = patchlib_field_get_type(field);
+    return type == PATCH_POINTER || type == PATCH_OBJECT;
+}
+
+static bool read_vector2_field(patch_handle_t field, patch_handle_t instance,
+                               elite_vector2_t *out) {
+    if (!out || !valid_vector2_field(field)) return false;
+    return get_field_value(field, instance, out);
+}
+
+static bool write_vector2_field(patch_handle_t field, patch_handle_t instance,
+                                const elite_vector2_t *value) {
+    if (!value || !valid_vector2_field(field)) return false;
+
+#if defined(__ANDROID__)
+    /* Vector2 is a value type in the target game. When the runtime exposes
+     * the backing address, writing the two floats directly avoids boxing and
+     * is the same safe path already used by the existing velocity hook. */
+    void *raw = patchlib_field_get_pointer(field, instance);
+    if (raw) {
+        memcpy(raw, value, sizeof(*value));
+        return true;
+    }
+#endif
+
+    return set_field_value(field, instance, (void *)value);
+}
+
+static float float_abs(float value) {
+    return value < 0.0f ? -value : value;
+}
+
+static float float_sign(float value) {
+    return value < 0.0f ? -1.0f : 1.0f;
+}
+
+static float vector_distance_sq(elite_vector2_t a, elite_vector2_t b) {
+    float dx = a.x - b.x;
+    float dy = a.y - b.y;
+    return dx * dx + dy * dy;
 }
 
 static bool already_processed(void *instance) {
@@ -228,18 +357,28 @@ static size_t elite_instance_index(void *instance) {
     return PROCESSED_INSTANCE_LIMIT;
 }
 
-static void remember_elite_instance(void *instance, elite_rank_t rank) {
+static void set_elite_state(size_t slot, elite_rank_t rank,
+                            elite_behavior_t behavior, int32_t base_damage) {
+    g_elite_ranks[slot] = rank;
+    g_elite_behaviors[slot] = behavior;
+    g_elite_ai_ticks[slot] = 0;
+    g_elite_base_damage[slot] = base_damage;
+    g_elite_enraged[slot] = false;
+}
+
+static void remember_elite_instance(void *instance, elite_rank_t rank,
+                                    elite_behavior_t behavior,
+                                    int32_t base_damage) {
     if (!instance || is_elite_instance(instance)) return;
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
-        g_elite_instances[g_elite_instance_count] = instance;
-        g_elite_ranks[g_elite_instance_count] = rank;
-        g_elite_ai_ticks[g_elite_instance_count] = 0;
+        size_t slot = g_elite_instance_count;
+        g_elite_instances[slot] = instance;
+        set_elite_state(slot, rank, behavior, base_damage);
         ++g_elite_instance_count;
     } else {
         size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
         g_elite_instances[slot] = instance;
-        g_elite_ranks[slot] = rank;
-        g_elite_ai_ticks[slot] = 0;
+        set_elite_state(slot, rank, behavior, base_damage);
     }
 }
 
@@ -341,23 +480,84 @@ static const char *progress_name(elite_progress_t progress) {
     return names[progress];
 }
 
-typedef struct elite_vector2_t {
-    float x;
-    float y;
-} elite_vector2_t;
-
 static bool read_npc_position(patch_handle_t instance, int32_t *x, int32_t *y) {
-    if (!instance || !x || !y ||
-        !valid_field(g_field_position, PATCH_POINTER) ||
-        patchlib_field_get_size(g_field_position) != sizeof(elite_vector2_t)) {
+    if (!instance || !x || !y) {
         return false;
     }
 
     elite_vector2_t position = {0.0f, 0.0f};
-    patchlib_field_get_value(g_field_position, instance, &position);
+    if (!read_vector2_field(g_field_position, instance, &position)) {
+        return false;
+    }
     *x = (int32_t)position.x;
     *y = (int32_t)position.y;
     return true;
+}
+
+static bool read_player_state(int32_t player_index, elite_vector2_t *position,
+                              int32_t *width, int32_t *height) {
+    if (player_index < 0 || player_index > 255 || !position ||
+        !g_main_player_field || !patchlib_is_valid(g_main_player_field) ||
+        !g_player_position_field) {
+        return false;
+    }
+
+    patch_handle_t players = NULL;
+    if (!get_field_value(g_main_player_field, NULL, &players)) return false;
+    if (!players || !patchlib_is_valid(players) ||
+        (size_t)player_index >= patchlib_array_length(players)) {
+        return false;
+    }
+
+    patch_handle_t player = NULL;
+    if (!patchlib_array_at(players, (size_t)player_index, &player) ||
+        !player || !patchlib_is_valid(player)) {
+        return false;
+    }
+
+    bool active = true;
+    bool dead = false;
+    if (valid_field(g_player_active_field, PATCH_BOOL) &&
+        read_bool(g_player_active_field, player, &active) && !active) {
+        return false;
+    }
+    if (valid_field(g_player_dead_field, PATCH_BOOL) &&
+        read_bool(g_player_dead_field, player, &dead) && dead) {
+        return false;
+    }
+    if (!read_vector2_field(g_player_position_field, player, position)) {
+        return false;
+    }
+
+    if (width) {
+        *width = 20;
+        (void)read_i32(g_player_width_field, player, width);
+        if (*width <= 0) *width = 20;
+    }
+    if (height) {
+        *height = 40;
+        (void)read_i32(g_player_height_field, player, height);
+        if (*height <= 0) *height = 40;
+    }
+    return true;
+}
+
+static int32_t target_player_index(patch_handle_t instance) {
+    int32_t target = -1;
+    int32_t local_player = -1;
+    int32_t net_mode = 0;
+    (void)read_i32(g_field_target, instance, &target);
+    (void)read_i32(g_main_my_player_field, NULL, &local_player);
+    (void)read_i32(g_main_net_mode_field, NULL, &net_mode);
+
+    /* In single-player, Main.myPlayer is authoritative. On a server, keep
+     * the target selected by vanilla AI instead of forcing player zero. */
+    if (net_mode == 0 && local_player >= 0 && local_player <= 255) {
+        return local_player;
+    }
+    if (target >= 0 && target <= 255) return target;
+    if (local_player >= 0 && local_player <= 255) return local_player;
+    return -1;
 }
 
 static int legendary_reward_item(elite_progress_t progress) {
@@ -366,6 +566,53 @@ static int legendary_reward_item(elite_progress_t progress) {
     return progress == PROGRESS_PRE_HARDMODE
                ? ITEM_GOLDEN_CRATE
                : ITEM_GOLDEN_CRATE_HARD;
+}
+
+static elite_behavior_t detect_behavior(patch_handle_t instance) {
+    int32_t ai_style = -1;
+    bool no_gravity = false;
+    (void)read_i32(g_field_ai_style, instance, &ai_style);
+    (void)read_bool(g_field_no_gravity, instance, &no_gravity);
+
+    switch (ai_style) {
+        case 1:  /* Slime */
+        case 3:  /* Fighter */
+        case 16: /* Piranha */
+        case 22: /* Hovering fighter */
+        case 23: /* Enchanted sword */
+        case 40: /* Spider */
+        case 41: /* Herpling */
+            return ELITE_BEHAVIOR_MELEE;
+        case 26: /* Unicorn / wolf / other charge AI */
+        case 39: /* Giant tortoise / shellies */
+            return ELITE_BEHAVIOR_CHARGER;
+        case 8:  /* Caster */
+        case 9:  /* Spell */
+        case 17: /* Vulture */
+        case 19: /* Antlion */
+        case 38: /* Snowman ranged variants */
+        case 49: /* Angry Nimbus */
+            return ELITE_BEHAVIOR_RANGED;
+        case 6:  /* Worm */
+            return ELITE_BEHAVIOR_WORM;
+        case 13: /* Man Eater / Clinger style */
+        case 20: /* Spike ball */
+        case 21: /* Blazing wheel */
+            return ELITE_BEHAVIOR_SPECIAL;
+        case 2:  /* Demon Eye */
+        case 5:  /* Flying */
+        case 14: /* Bat */
+        case 18: /* Jellyfish */
+        case 24: /* Bird */
+        case 44: /* Flying fish */
+            return ELITE_BEHAVIOR_FLYING;
+        default:
+            /* Unknown no-gravity enemies are safer to treat as flyers. For a
+             * normal grounded enemy, the vanilla contact AI is the closest
+             * reliable indication that it is melee-oriented. */
+            return no_gravity ? ELITE_BEHAVIOR_FLYING
+                              : ELITE_BEHAVIOR_MELEE;
+    }
 }
 
 static bool reward_drop_allowed(void) {
@@ -443,9 +690,10 @@ static void apply_elite_profile(patch_handle_t instance) {
                          scaled_i32(life, profile.health_multiplier));
 
     int32_t damage = 0;
+    int32_t elite_damage = 0;
     if (read_i32(g_field_damage, instance, &damage)) {
-        changed |= write_i32(g_field_damage, instance,
-                             scaled_i32(damage, profile.damage_multiplier));
+        elite_damage = scaled_i32(damage, profile.damage_multiplier);
+        changed |= write_i32(g_field_damage, instance, elite_damage);
     }
 
     int32_t defense = 0;
@@ -459,8 +707,14 @@ static void apply_elite_profile(patch_handle_t instance) {
     float knockback = 0.0f;
     if (valid_field(g_field_knockback_resist, PATCH_FLOAT)) {
         patchlib_field_get_value(g_field_knockback_resist, instance, &knockback);
+        /* Terraria uses 0.0 as complete knockback immunity. Only legendary
+         * elites get this rule; normal and rare elites retain graded
+         * resistance so ordinary crowd control remains useful. */
+        float adjusted_knockback = profile.rank == ELITE_LEGENDARY
+                                       ? 0.0f
+                                       : knockback * profile.knockback_multiplier;
         changed |= write_float(g_field_knockback_resist, instance,
-                               knockback * profile.knockback_multiplier);
+                               adjusted_knockback);
     }
 
     int32_t width = 0;
@@ -491,7 +745,8 @@ static void apply_elite_profile(patch_handle_t instance) {
 
     /* Keep the instance marked even if a field is unavailable in this game
      * build. The name and drawing hooks still need to identify the NPC. */
-    remember_elite_instance(instance, profile.rank);
+    remember_elite_instance(instance, profile.rank, detect_behavior(instance),
+                            elite_damage);
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -601,7 +856,9 @@ static void cache_npc_fields(patch_handle_t npc) {
     g_field_town_npc = patchlib_type_get_field(npc, "townNPC");
     g_field_boss = patchlib_type_get_field(npc, "boss");
     g_field_target = patchlib_type_get_field(npc, "target");
+    g_field_ai_style = patchlib_type_get_field(npc, "aiStyle");
     g_field_direction = patchlib_type_get_field(npc, "direction");
+    g_field_net_update = patchlib_type_get_field(npc, "netUpdate");
     g_field_no_gravity = patchlib_type_get_field(npc, "noGravity");
     g_field_velocity = patchlib_type_get_field(npc, "velocity");
 
@@ -617,6 +874,16 @@ static void cache_npc_fields(patch_handle_t npc) {
         }
         g_main_net_mode_field = patchlib_type_get_field(main_type, "netMode");
         g_main_my_player_field = patchlib_type_get_field(main_type, "myPlayer");
+        g_main_player_field = patchlib_type_get_field(main_type, "player");
+    }
+
+    patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
+    if (player_type && patchlib_is_valid(player_type)) {
+        g_player_position_field = patchlib_type_get_field(player_type, "position");
+        g_player_width_field = patchlib_type_get_field(player_type, "width");
+        g_player_height_field = patchlib_type_get_field(player_type, "height");
+        g_player_active_field = patchlib_type_get_field(player_type, "active");
+        g_player_dead_field = patchlib_type_get_field(player_type, "dead");
     }
 
     g_npc_downed_mech_field = patchlib_type_get_field(npc, "downedMechBossAny");
@@ -836,10 +1103,265 @@ static void discover_mouse_text_api(patch_handle_t main_type) {
     }
 }
 
-/* AI enhancement layer. The original NPC.AI runs first; this postfix only
- * improves target selection and gives rare/legendary elites a cooldown-based
- * dash. If velocity is not exposed as a safe 8-byte Vector2 field on a game
- * build, target locking remains active and the dash is skipped. */
+static void request_npc_net_update(patch_handle_t instance) {
+    if (!instance) return;
+    (void)write_bool(g_field_net_update, instance, true);
+}
+
+static bool multiplayer_client(void) {
+    int32_t net_mode = 0;
+    (void)read_i32(g_main_net_mode_field, NULL, &net_mode);
+    return net_mode == 1;
+}
+
+static uint32_t legendary_action_interval(elite_behavior_t behavior,
+                                          bool enraged) {
+    uint32_t interval = 150u;
+    switch (behavior) {
+        case ELITE_BEHAVIOR_MELEE:
+            interval = 180u;
+            break;
+        case ELITE_BEHAVIOR_CHARGER:
+            interval = 120u;
+            break;
+        case ELITE_BEHAVIOR_RANGED:
+            interval = 150u;
+            break;
+        case ELITE_BEHAVIOR_FLYING:
+            interval = 105u;
+            break;
+        case ELITE_BEHAVIOR_WORM:
+            interval = 135u;
+            break;
+        case ELITE_BEHAVIOR_SPECIAL:
+            interval = 165u;
+            break;
+    }
+    if (enraged && interval > 60u) interval = (interval * 3u) / 4u;
+    return interval < 45u ? 45u : interval;
+}
+
+static void update_legendary_enrage(patch_handle_t instance, size_t index) {
+    if (g_elite_enraged[index]) return;
+
+    int32_t life = 0;
+    int32_t life_max = 0;
+    if (!read_i32(g_field_life, instance, &life) ||
+        !read_i32(g_field_life_max, instance, &life_max) || life <= 0 ||
+        life_max <= 0) {
+        return;
+    }
+
+    if ((int64_t)life * 100 >
+        (int64_t)life_max * LEGENDARY_ENRAGE_LIFE_PERCENT) {
+        return;
+    }
+
+    if (g_elite_base_damage[index] > 0) {
+        (void)write_i32(
+            g_field_damage, instance,
+            scaled_i32(g_elite_base_damage[index],
+                       LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER));
+    }
+    g_elite_enraged[index] = true;
+    request_npc_net_update(instance);
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Legendary elite entered enrage: damage=%.2fx life=%d/%d",
+              (double)LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER, (int)life,
+              (int)life_max);
+}
+
+static bool legendary_melee_teleport(patch_handle_t instance,
+                                     elite_vector2_t player_position,
+                                     int32_t player_width,
+                                     int32_t player_height) {
+    elite_vector2_t npc_position = {0.0f, 0.0f};
+    if (!read_vector2_field(g_field_position, instance, &npc_position)) {
+        return false;
+    }
+
+    int32_t npc_width = 32;
+    int32_t npc_height = 40;
+    (void)read_i32(g_field_width, instance, &npc_width);
+    (void)read_i32(g_field_height, instance, &npc_height);
+    if (npc_width <= 0) npc_width = 32;
+    if (npc_height <= 0) npc_height = 40;
+    if (player_width <= 0) player_width = 20;
+    if (player_height <= 0) player_height = 40;
+
+    elite_vector2_t npc_center = {
+        npc_position.x + (float)npc_width * 0.5f,
+        npc_position.y + (float)npc_height * 0.5f
+    };
+    elite_vector2_t player_center = {
+        player_position.x + (float)player_width * 0.5f,
+        player_position.y + (float)player_height * 0.5f
+    };
+    if (vector_distance_sq(npc_center, player_center) <
+        LEGENDARY_TELEPORT_DISTANCE * LEGENDARY_TELEPORT_DISTANCE) {
+        return false;
+    }
+
+    /* Appear on the side beyond the player, rather than directly inside the
+     * player hitbox. This creates pressure while leaving a short reaction
+     * window and avoids an unavoidable contact hit on the teleport frame. */
+    float side = npc_center.x <= player_center.x ? 1.0f : -1.0f;
+    elite_vector2_t destination = {
+        side > 0.0f
+            ? player_position.x + (float)player_width + LEGENDARY_TELEPORT_OFFSET
+            : player_position.x - (float)npc_width - LEGENDARY_TELEPORT_OFFSET,
+        player_center.y - (float)npc_height * 0.5f
+    };
+    if (!write_vector2_field(g_field_position, instance, &destination)) {
+        return false;
+    }
+
+    int32_t direction = destination.x + (float)npc_width * 0.5f <
+                                player_center.x
+                            ? 1
+                            : -1;
+    (void)write_i32(g_field_direction, instance, direction);
+    elite_vector2_t stopped = {0.0f, 0.0f};
+    (void)write_vector2_field(g_field_velocity, instance, &stopped);
+    request_npc_net_update(instance);
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Legendary melee teleport executed: offset=%.0f",
+              (double)LEGENDARY_TELEPORT_OFFSET);
+    return true;
+}
+
+static void apply_rank_dash(patch_handle_t instance, elite_rank_t rank) {
+    if (!valid_vector2_field(g_field_velocity)) return;
+
+    elite_vector2_t velocity = {0.0f, 0.0f};
+    if (!read_vector2_field(g_field_velocity, instance, &velocity)) return;
+
+    int32_t direction = 1;
+    (void)read_i32(g_field_direction, instance, &direction);
+    if (direction == 0) direction = 1;
+    velocity.x = direction > 0 ? (rank == ELITE_LEGENDARY ? 8.0f : 6.0f)
+                               : (rank == ELITE_LEGENDARY ? -8.0f : -6.0f);
+
+    bool no_gravity = true;
+    (void)read_bool(g_field_no_gravity, instance, &no_gravity);
+    if (!no_gravity && velocity.y > -6.0f) velocity.y = -6.0f;
+    (void)write_vector2_field(g_field_velocity, instance, &velocity);
+}
+
+static void apply_legendary_movement(patch_handle_t instance, size_t index,
+                                     elite_vector2_t player_position,
+                                     int32_t player_width,
+                                     int32_t player_height) {
+    elite_behavior_t behavior = g_elite_behaviors[index];
+    elite_vector2_t npc_position = {0.0f, 0.0f};
+    elite_vector2_t velocity = {0.0f, 0.0f};
+    if (!read_vector2_field(g_field_position, instance, &npc_position) ||
+        !read_vector2_field(g_field_velocity, instance, &velocity)) {
+        return;
+    }
+
+    int32_t npc_width = 32;
+    int32_t npc_height = 40;
+    (void)read_i32(g_field_width, instance, &npc_width);
+    (void)read_i32(g_field_height, instance, &npc_height);
+    if (npc_width <= 0) npc_width = 32;
+    if (npc_height <= 0) npc_height = 40;
+    if (player_width <= 0) player_width = 20;
+    if (player_height <= 0) player_height = 40;
+
+    elite_vector2_t npc_center = {
+        npc_position.x + (float)npc_width * 0.5f,
+        npc_position.y + (float)npc_height * 0.5f
+    };
+    elite_vector2_t player_center = {
+        player_position.x + (float)player_width * 0.5f,
+        player_position.y + (float)player_height * 0.5f
+    };
+    float dx = player_center.x - npc_center.x;
+    float dy = player_center.y - npc_center.y;
+    float abs_dx = float_abs(dx);
+    float abs_dy = float_abs(dy);
+    float distance_sq = vector_distance_sq(npc_center, player_center);
+    float diagonal_scale = abs_dx + abs_dy;
+    if (diagonal_scale < 1.0f) diagonal_scale = 1.0f;
+    float toward_x = dx / diagonal_scale;
+    float toward_y = dy / diagonal_scale;
+    float phase = ((g_elite_ai_ticks[index] /
+                    legendary_action_interval(behavior,
+                                              g_elite_enraged[index])) &
+                   1u) == 0u
+                      ? 1.0f
+                      : -1.0f;
+    bool no_gravity = false;
+    (void)read_bool(g_field_no_gravity, instance, &no_gravity);
+
+    switch (behavior) {
+        case ELITE_BEHAVIOR_MELEE:
+            if (distance_sq >= LEGENDARY_TELEPORT_DISTANCE *
+                                  LEGENDARY_TELEPORT_DISTANCE &&
+                legendary_melee_teleport(instance, player_position,
+                                         player_width, player_height)) {
+                return;
+            }
+            if (abs_dx > 160.0f) {
+                velocity.x = float_sign(dx) *
+                             (g_elite_enraged[index] ? 9.0f : 7.0f);
+            }
+            if (no_gravity && abs_dy > 80.0f) velocity.y = toward_y * 6.0f;
+            break;
+        case ELITE_BEHAVIOR_CHARGER:
+            if (distance_sq >= LEGENDARY_TELEPORT_DISTANCE *
+                                  LEGENDARY_TELEPORT_DISTANCE &&
+                legendary_melee_teleport(instance, player_position,
+                                         player_width, player_height)) {
+                return;
+            }
+            velocity.x = float_sign(dx) *
+                         (g_elite_enraged[index] ? 14.0f : 12.0f);
+            if (no_gravity) {
+                velocity.y = toward_y * 8.0f;
+            } else if (dy < -96.0f && velocity.y > -1.0f) {
+                velocity.y = -8.0f;
+            }
+            break;
+        case ELITE_BEHAVIOR_RANGED:
+            /* Keep the vanilla projectile attack, but force a periodic
+             * lateral reposition so a ranged legendary cannot be defeated by
+             * standing still directly in front of it. */
+            if (abs_dx < 720.0f) {
+                velocity.x = -float_sign(dx) * 8.0f + phase * 5.0f;
+            } else {
+                velocity.x = float_sign(dx) * 7.0f + phase * 3.0f;
+            }
+            if (no_gravity && abs_dy > 120.0f) velocity.y = toward_y * 6.0f;
+            break;
+        case ELITE_BEHAVIOR_FLYING:
+            /* The perpendicular component makes flyers weave instead of
+             * following a predictable straight line. */
+            velocity.x = toward_x * 11.0f - toward_y * phase * 8.0f;
+            velocity.y = toward_y * 11.0f + toward_x * phase * 8.0f;
+            break;
+        case ELITE_BEHAVIOR_WORM:
+            /* A periodic diagonal burst preserves the worm's original AI and
+             * makes its approach dangerous without teleporting underground. */
+            velocity.x = toward_x * 13.0f + phase * 3.0f;
+            velocity.y = toward_y * 13.0f - phase * 3.0f;
+            break;
+        case ELITE_BEHAVIOR_SPECIAL:
+            velocity.x = -float_sign(dx) * 6.0f + phase * 7.0f;
+            if (no_gravity) velocity.y = toward_y * 7.0f;
+            break;
+    }
+
+    if (write_vector2_field(g_field_velocity, instance, &velocity)) {
+        request_npc_net_update(instance);
+    }
+}
+
+/* AI enhancement layer. The original NPC.AI runs first. Normal and rare
+ * elites retain the earlier target-lock/dash behavior. Legendary elites add
+ * type-aware movement, a one-time low-health enrage, and true knockback
+ * immunity without replacing vanilla attack/projectile logic. */
 static void ai_postfix(patch_handle_t instance, void **args, void *result,
                        const patch_method_signature_t *sig_info) {
     (void)args;
@@ -851,35 +1373,41 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     if (index >= PROCESSED_INSTANCE_LIMIT) return;
     ++g_elite_ai_ticks[index];
 
-    int32_t player = -1;
-    if (read_i32(g_main_my_player_field, NULL, &player) && player >= 0) {
-        (void)write_i32(g_field_target, instance, player);
-    }
+    int32_t player = target_player_index(instance);
+    if (player >= 0) (void)write_i32(g_field_target, instance, player);
 
     elite_rank_t rank = g_elite_ranks[index];
-    if (rank == ELITE_NORMAL) return;
-    uint32_t dash_interval = rank == ELITE_LEGENDARY ? 90u : 150u;
-    if (g_elite_ai_ticks[index] % dash_interval != 0u) return;
-
-#if defined(__ANDROID__)
-    if (!valid_field(g_field_velocity, PATCH_OBJECT) ||
-        patchlib_field_get_size(g_field_velocity) != 8u) {
+    if (rank != ELITE_LEGENDARY) {
+        if (rank == ELITE_RARE &&
+            g_elite_ai_ticks[index] % 150u == 0u) {
+            apply_rank_dash(instance, rank);
+        }
         return;
     }
-    float *velocity = (float *)patchlib_field_get_pointer(g_field_velocity,
-                                                           instance);
-    if (!velocity) return;
 
-    int32_t direction = 1;
-    (void)read_i32(g_field_direction, instance, &direction);
-    if (direction == 0) direction = 1;
-    float dash_speed = rank == ELITE_LEGENDARY ? 8.0f : 6.0f;
-    velocity[0] = direction > 0 ? dash_speed : -dash_speed;
+    /* Re-apply this each AI tick in case a vanilla AI branch writes the field
+     * back while processing its own movement. */
+    (void)write_float(g_field_knockback_resist, instance, 0.0f);
+    update_legendary_enrage(instance, index);
 
-    bool no_gravity = true;
-    (void)read_bool(g_field_no_gravity, instance, &no_gravity);
-    if (!no_gravity && velocity[1] > -6.0f) velocity[1] = -6.0f;
-#endif
+    /* Movement is authoritative on the server/single-player side. The
+     * client still receives the normal target and stat changes, but does not
+     * create a second teleport or velocity update. */
+    if (multiplayer_client() || player < 0) return;
+
+    uint32_t interval = legendary_action_interval(
+        g_elite_behaviors[index], g_elite_enraged[index]);
+    if (g_elite_ai_ticks[index] % interval != 0u) return;
+
+    elite_vector2_t player_position = {0.0f, 0.0f};
+    int32_t player_width = 20;
+    int32_t player_height = 40;
+    if (!read_player_state(player, &player_position, &player_width,
+                           &player_height)) {
+        return;
+    }
+    apply_legendary_movement(instance, index, player_position, player_width,
+                             player_height);
 }
 
 static bool install_ai_hook(patch_handle_t method, const char *name) {
@@ -1090,9 +1618,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083115,
+    .version_code = 2026083120,
     .api_version = 1,
-    .version = "1.0.5"
+    .version = "1.1.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
