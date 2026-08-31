@@ -1,9 +1,11 @@
-# EliteMonsters 0.5.0（100% 概率和彩色名称测试版）
+# EliteMonsters 0.6.0（100% 概率和红色名称修复版）
 
 This revision connects the existing `Terraria.NPC.SetDefaults` hook to the
-elite profile generator. It filters friendly/town/boss/inactive NPCs, applies
-the configured world-mode chance, scales supported NPC fields, and prevents
-repeat transformation of the same instance.
+elite profile generator. It filters friendly/town/boss NPCs, applies the
+configured world-mode chance, scales supported NPC fields, and prevents repeat
+transformation of the same instance. Elite NPC names receive a `【精英】`
+marker; the `Main.MouseText` hover path also forces rarity 10 so the marker is
+red even when Android does not parse chat color tags in NPC names.
 
 Build the ARM64 package on a machine with CMake and the Android NDK installed:
 

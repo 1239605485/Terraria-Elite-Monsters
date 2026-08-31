@@ -53,7 +53,12 @@ static const int g_spawn_chance_percent[5] = {100, 100, 100, 100, 100};
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
 static size_t g_setdefaults_hook_count = 0;
-static patch_hook_id_t g_full_name_hook = PATCH_HOOK_INVALID_ID;
+#define NPC_NAME_HOOK_LIMIT 3
+static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
+static size_t g_npc_name_hook_count = 0;
+#define MOUSE_TEXT_HOOK_LIMIT 2
+static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
+static size_t g_mouse_text_hook_count = 0;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
 
@@ -265,8 +270,10 @@ static void apply_elite_profile(patch_handle_t instance) {
                                scale * profile.scale_multiplier);
     }
 
+    /* Keep the instance marked even if a field is unavailable in this game
+     * build. The name and drawing hooks still need to identify the NPC. */
+    remember_elite_instance(instance);
     if (changed) {
-        remember_elite_instance(instance);
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "Elite NPC transformed: type=%d rank=%d affixes=0x%X total=%lu",
@@ -275,9 +282,10 @@ static void apply_elite_profile(patch_handle_t instance) {
     }
 }
 
-/* Terraria's MouseText renderer accepts the same color-tag format used by chat:
- * [c/FF4040:text].  NPC.FullName is the string used by the hover name UI. */
-static void fullname_postfix(patch_handle_t instance, void **args, void *result,
+/* Add a visible marker at the NPC name source. The MouseText hook below also
+ * applies a red rarity directly, so this works even when the Android build
+ * does not parse [c/...] tags in the NPC hover renderer. */
+static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
                              const patch_method_signature_t *sig_info) {
     (void)args;
     (void)sig_info;
@@ -290,7 +298,7 @@ static void fullname_postfix(patch_handle_t instance, void **args, void *result,
         free(name);
         return;
     }
-    if (strncmp(name, "[c/FF4040:", 11) == 0) {
+    if (strstr(name, "【精英】") != NULL) {
         free(name);
         return;
     }
@@ -385,28 +393,90 @@ static void discover_spawn_api(void) {
 }
 
 static void discover_name_api(patch_handle_t npc) {
-    patch_handle_t method = patchlib_type_get_method_by_param_count(
-        npc, "get_FullName", 0);
-    if (!method || !patchlib_is_valid(method)) {
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "NPC.FullName getter was not found; colored name disabled");
-        return;
-    }
+    const char *name_getters[NPC_NAME_HOOK_LIMIT] = {
+        "get_FullName", "get_TypeName", "get_GivenOrTypeName"
+    };
 
-    patch_method_signature_t sig = {0};
-    if (!patchlib_method_get_signature(method, &sig)) return;
-    if (!sig.is_instance) {
+    for (size_t i = 0; i < NPC_NAME_HOOK_LIMIT; ++i) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            npc, name_getters[i], 0);
+        if (!method || !patchlib_is_valid(method)) continue;
+
+        patch_method_signature_t sig = {0};
+        if (!patchlib_method_get_signature(method, &sig)) continue;
+        if (!sig.is_instance || sig.return_type != PATCH_OBJECT) {
+            patchlib_method_signature_free(&sig);
+            continue;
+        }
+
+        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+            method, NULL, npc_name_postfix);
+        if (hook_id != PATCH_HOOK_INVALID_ID &&
+            g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT) {
+            g_npc_name_hooks[g_npc_name_hook_count++] = hook_id;
+            ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                      "NPC name getter hook installed: %s id=%d",
+                      name_getters[i], (int)hook_id);
+        }
         patchlib_method_signature_free(&sig);
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "NPC.FullName getter is not an instance method");
-        return;
+    }
+}
+
+/* Main.MouseText receives the final hover string and an integer rarity.
+ * Rarity 10 is rendered red/pink by vanilla Terraria. This direct color path
+ * is used in addition to the [c/...] text tag for Android compatibility. */
+static bool mouse_text_prefix(patch_handle_t instance, void **args,
+                              const patch_method_signature_t *sig_info,
+                              void *result) {
+    (void)instance;
+    (void)result;
+    if (!args || !sig_info ||
+        tefstd_vector_size(&sig_info->arg_types) < 3 || !args[0]) {
+        return false;
     }
 
-    g_full_name_hook = patchlib_install_prepost_hook(method, NULL,
-                                                      fullname_postfix);
-    ELITE_LOG(MOD_LOG_LEVEL_INFO,
-              "Colored NPC.FullName hook id=%d", (int)g_full_name_hook);
-    patchlib_method_signature_free(&sig);
+    patch_handle_t text_handle = *(patch_handle_t *)args[0];
+    if (!text_handle || !patchlib_is_valid(text_handle)) return false;
+    char *text = patchlib_string_cstr(text_handle);
+    if (!text) return false;
+
+    const bool is_elite_name = strstr(text, "【精英】") != NULL;
+    free(text);
+    if (!is_elite_name) return false;
+
+    const size_t arg_count = tefstd_vector_size(&sig_info->arg_types);
+    /* MouseText(string, int, byte, ...) and
+     * MouseText(string, string, int, byte, ...). */
+    const size_t rare_index = (arg_count >= 10) ? 2 : 1;
+    if (args[rare_index]) *(int *)args[rare_index] = 10;
+    return false;
+}
+
+static void discover_mouse_text_api(patch_handle_t main_type) {
+    const int arg_counts[MOUSE_TEXT_HOOK_LIMIT] = {8, 10};
+    for (size_t i = 0; i < MOUSE_TEXT_HOOK_LIMIT; ++i) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            main_type, "MouseText", arg_counts[i]);
+        if (!method || !patchlib_is_valid(method)) continue;
+
+        patch_method_signature_t sig = {0};
+        if (!patchlib_method_get_signature(method, &sig)) continue;
+        if (!sig.is_instance || sig.return_type != PATCH_VOID) {
+            patchlib_method_signature_free(&sig);
+            continue;
+        }
+
+        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+            method, mouse_text_prefix, NULL);
+        if (hook_id != PATCH_HOOK_INVALID_ID &&
+            g_mouse_text_hook_count < MOUSE_TEXT_HOOK_LIMIT) {
+            g_mouse_text_hooks[g_mouse_text_hook_count++] = hook_id;
+            ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                      "Main.MouseText color hook installed: params=%d id=%d",
+                      arg_counts[i], (int)hook_id);
+        }
+        patchlib_method_signature_free(&sig);
+    }
 }
 
 static void init_mod(kernel_mod_handle_t* handle) {
@@ -417,6 +487,10 @@ static void init_mod(kernel_mod_handle_t* handle) {
     discover_spawn_api();
     patch_handle_t npc = patchlib_type_get_type("Terraria", "NPC");
     if (npc && patchlib_is_valid(npc)) discover_name_api(npc);
+    patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
+    if (main_type && patchlib_is_valid(main_type)) {
+        discover_mouse_text_api(main_type);
+    }
     (void)elite_should_spawn;
     (void)make_profile;
 }
@@ -427,18 +501,22 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_setdefaults_hooks[i]);
     }
     g_setdefaults_hook_count = 0;
-    if (g_full_name_hook != PATCH_HOOK_INVALID_ID) {
-        patchlib_uninstall_hook(g_full_name_hook);
-        g_full_name_hook = PATCH_HOOK_INVALID_ID;
+    for (size_t i = 0; i < g_npc_name_hook_count; ++i) {
+        patchlib_uninstall_hook(g_npc_name_hooks[i]);
     }
+    g_npc_name_hook_count = 0;
+    for (size_t i = 0; i < g_mouse_text_hook_count; ++i) {
+        patchlib_uninstall_hook(g_mouse_text_hooks[i]);
+    }
+    g_mouse_text_hook_count = 0;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083104,
+    .version_code = 2026083105,
     .api_version = 1,
-    .version = "0.5.0"
+    .version = "0.6.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
