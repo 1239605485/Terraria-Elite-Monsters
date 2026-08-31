@@ -159,20 +159,20 @@ static unsigned long g_elite_count = 0;
 static unsigned long g_rare_reward_count = 0;
 static unsigned long g_legendary_reward_count = 0;
 
-/* SetDefaults can be called more than once for the same object.  Keep a
- * bounded pointer set so a transformed NPC is not multiplied repeatedly. */
+/* Terraria keeps a fixed NPC object pool and reuses the same object pointer
+ * for many different spawns.  State stored here therefore describes only the
+ * NPC's current SetDefaults lifecycle; it must be reset every time
+ * SetDefaults completes for that object. */
 #define PROCESSED_INSTANCE_LIMIT 1024
-static void *g_processed_instances[PROCESSED_INSTANCE_LIMIT];
-static size_t g_processed_instance_count = 0;
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
+static bool g_elite_active[PROCESSED_INSTANCE_LIMIT];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
 static elite_behavior_t g_elite_behaviors[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
 static int32_t g_elite_base_damage[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_enraged[PROCESSED_INSTANCE_LIMIT];
+static bool g_elite_rewarded[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
-static void *g_rewarded_instances[PROCESSED_INSTANCE_LIMIT];
-static size_t g_rewarded_instance_count = 0;
 
 /* Terraria 1.4.5.6.4 ItemID values from the target game's ItemID table.
  * Every reward below is an original Terraria item or environment crate. */
@@ -522,51 +522,54 @@ static float vector_distance_sq(elite_vector2_t a, elite_vector2_t b) {
     return dx * dx + dy * dy;
 }
 
-static bool already_processed(void *instance) {
-    for (size_t i = 0; i < g_processed_instance_count; ++i) {
-        if (g_processed_instances[i] == instance) return true;
-    }
-    return false;
-}
-
-static void remember_processed(void *instance) {
-    if (!instance || already_processed(instance)) return;
-    if (g_processed_instance_count < PROCESSED_INSTANCE_LIMIT) {
-        g_processed_instances[g_processed_instance_count++] = instance;
-    } else {
-        /* Reuse the oldest slot rather than growing unboundedly. */
-        size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
-        g_processed_instances[slot] = instance;
-    }
-}
-
-static bool is_elite_instance(void *instance) {
-    for (size_t i = 0; i < g_elite_instance_count; ++i) {
-        if (g_elite_instances[i] == instance) return true;
-    }
-    return false;
-}
-
-static size_t elite_instance_index(void *instance) {
+static size_t tracked_instance_index(void *instance) {
     for (size_t i = 0; i < g_elite_instance_count; ++i) {
         if (g_elite_instances[i] == instance) return i;
     }
     return PROCESSED_INSTANCE_LIMIT;
 }
 
+static size_t elite_instance_index(void *instance) {
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (g_elite_active[i] && g_elite_instances[i] == instance) return i;
+    }
+    return PROCESSED_INSTANCE_LIMIT;
+}
+
+static bool is_elite_instance(void *instance) {
+    return elite_instance_index(instance) < PROCESSED_INSTANCE_LIMIT;
+}
+
+static void clear_elite_instance(void *instance) {
+    size_t slot = tracked_instance_index(instance);
+    if (slot >= PROCESSED_INSTANCE_LIMIT) return;
+    g_elite_active[slot] = false;
+    g_elite_rewarded[slot] = false;
+    g_elite_ai_ticks[slot] = 0;
+    g_elite_base_damage[slot] = 0;
+    g_elite_enraged[slot] = false;
+}
+
 static void set_elite_state(size_t slot, elite_rank_t rank,
                             elite_behavior_t behavior, int32_t base_damage) {
+    g_elite_active[slot] = true;
     g_elite_ranks[slot] = rank;
     g_elite_behaviors[slot] = behavior;
     g_elite_ai_ticks[slot] = 0;
     g_elite_base_damage[slot] = base_damage;
     g_elite_enraged[slot] = false;
+    g_elite_rewarded[slot] = false;
 }
 
 static void remember_elite_instance(void *instance, elite_rank_t rank,
                                     elite_behavior_t behavior,
                                     int32_t base_damage) {
-    if (!instance || is_elite_instance(instance)) return;
+    if (!instance) return;
+    size_t existing_slot = tracked_instance_index(instance);
+    if (existing_slot < PROCESSED_INSTANCE_LIMIT) {
+        set_elite_state(existing_slot, rank, behavior, base_damage);
+        return;
+    }
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
         size_t slot = g_elite_instance_count;
         g_elite_instances[slot] = instance;
@@ -580,27 +583,19 @@ static void remember_elite_instance(void *instance, elite_rank_t rank,
 }
 
 static elite_rank_t elite_rank_for_instance(void *instance) {
-    for (size_t i = 0; i < g_elite_instance_count; ++i) {
-        if (g_elite_instances[i] == instance) return g_elite_ranks[i];
-    }
+    size_t slot = elite_instance_index(instance);
+    if (slot < PROCESSED_INSTANCE_LIMIT) return g_elite_ranks[slot];
     return ELITE_NORMAL;
 }
 
 static bool already_rewarded(void *instance) {
-    for (size_t i = 0; i < g_rewarded_instance_count; ++i) {
-        if (g_rewarded_instances[i] == instance) return true;
-    }
-    return false;
+    size_t slot = elite_instance_index(instance);
+    return slot < PROCESSED_INSTANCE_LIMIT && g_elite_rewarded[slot];
 }
 
 static void remember_rewarded(void *instance) {
-    if (!instance || already_rewarded(instance)) return;
-    if (g_rewarded_instance_count < PROCESSED_INSTANCE_LIMIT) {
-        g_rewarded_instances[g_rewarded_instance_count++] = instance;
-    } else {
-        size_t slot = g_legendary_reward_count % PROCESSED_INSTANCE_LIMIT;
-        g_rewarded_instances[slot] = instance;
-    }
+    size_t slot = elite_instance_index(instance);
+    if (slot < PROCESSED_INSTANCE_LIMIT) g_elite_rewarded[slot] = true;
 }
 
 static elite_world_mode_t profile_mode_for_game_mode(int game_mode) {
@@ -906,7 +901,12 @@ static bool spawn_vanilla_reward(patch_handle_t instance, int item_type,
 }
 
 static void apply_elite_profile(patch_handle_t instance) {
-    if (!instance || already_processed(instance)) return;
+    if (!instance) return;
+
+    /* SetDefaults resets the object to a new vanilla NPC, even when Terraria
+     * reuses exactly the same object pointer.  Invalidate the previous spawn's
+     * name/AI/reward state before evaluating the new spawn. */
+    clear_elite_instance(instance);
 
     int32_t npc_type = 0;
     int32_t life_max = 0;
@@ -923,7 +923,6 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (read_bool(g_field_town_npc, instance, &value) && value) return;
     if (read_bool(g_field_boss, instance, &value) && value) return;
 
-    remember_processed(instance);
     int profile_mode_value = current_world_mode();
     if (!elite_should_spawn(profile_mode_value)) return;
 
@@ -1918,9 +1917,10 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
     g_item_new_item_method = NULL;
-    g_processed_instance_count = 0;
     g_elite_instance_count = 0;
-    g_rewarded_instance_count = 0;
+    memset(g_elite_instances, 0, sizeof(g_elite_instances));
+    memset(g_elite_active, 0, sizeof(g_elite_active));
+    memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
     g_setdefaults_calls = 0;
     g_elite_count = 0;
     g_rare_reward_count = 0;
@@ -1930,9 +1930,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083121,
+    .version_code = 2026090101,
     .api_version = 1,
-    .version = "1.2.0"
+    .version = "1.2.1"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
