@@ -3,6 +3,7 @@
 #include "tefkernel/patchlib/type.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
+#include "tefkernel/patchlib/property.h"
 #include "tefkernel/patchlib/struct/array.h"
 #include "tefkernel/patchlib/struct/string.h"
 
@@ -27,6 +28,18 @@ typedef enum elite_rank_t {
     ELITE_RARE = 3,
     ELITE_LEGENDARY = 5
 } elite_rank_t;
+
+/* Terraria's native GameModeID values are Normal=0, Expert=1,
+ * Master=2, and Creative/Journey=3.  The fourth profile is the mod's
+ * custom Legendary profile and is enabled by Main.zenithWorld for the
+ * Zenith/fixed-boi special seed world. */
+typedef enum elite_world_mode_t {
+    ELITE_MODE_NORMAL,
+    ELITE_MODE_EXPERT,
+    ELITE_MODE_MASTER,
+    ELITE_MODE_LEGENDARY,
+    ELITE_MODE_COUNT
+} elite_world_mode_t;
 
 typedef enum elite_progress_t {
     PROGRESS_PRE_HARDMODE,
@@ -67,42 +80,64 @@ typedef struct elite_profile_t {
     uint32_t affix_mask;
 } elite_profile_t;
 
-/* Final values are selected from both world progress and elite rank.  This
- * keeps early-game elites reasonable while allowing late-game elites to stay
- * threatening. Defense is additive so low-defense enemies still receive a
- * meaningful increase. */
+typedef struct elite_mode_modifier_t {
+    const char *name;
+    float health_multiplier;
+    float damage_multiplier;
+    int32_t defense_bonus;
+    float scale_multiplier;
+    float knockback_multiplier;
+    float gold_multiplier;
+} elite_mode_modifier_t;
+
+/* Base values are selected from world progress and elite rank.  A separate
+ * mode modifier below then makes the same elite meaningfully different in
+ * Normal, Expert, Master, and Legendary profiles. Defense is additive so
+ * low-defense enemies still receive a meaningful increase. */
 static const elite_profile_t g_progress_profiles[5][3] = {
     {
-        {ELITE_NORMAL, 1.40f, 1.15f, 4, 1.05f, 1.10f, 2.0f, 0},
-        {ELITE_RARE, 2.00f, 1.40f, 8, 1.12f, 1.18f, 4.0f, 0},
-        {ELITE_LEGENDARY, 3.00f, 1.80f, 12, 1.20f, 1.28f, 10.0f, 0}
+        {ELITE_NORMAL, 1.40f, 1.15f, 4, 1.05f, 1.10f, 10.0f, 0},
+        {ELITE_RARE, 2.00f, 1.40f, 8, 1.12f, 1.18f, 25.0f, 0},
+        {ELITE_LEGENDARY, 3.00f, 1.80f, 12, 1.20f, 1.28f, 50.0f, 0}
     },
     {
-        {ELITE_NORMAL, 1.70f, 1.35f, 8, 1.08f, 1.12f, 3.0f, 0},
-        {ELITE_RARE, 2.60f, 1.80f, 15, 1.18f, 1.22f, 6.0f, 0},
-        {ELITE_LEGENDARY, 4.20f, 2.40f, 24, 1.30f, 1.35f, 15.0f, 0}
+        {ELITE_NORMAL, 1.70f, 1.35f, 8, 1.08f, 1.12f, 15.0f, 0},
+        {ELITE_RARE, 2.60f, 1.80f, 15, 1.18f, 1.22f, 40.0f, 0},
+        {ELITE_LEGENDARY, 4.20f, 2.40f, 24, 1.30f, 1.35f, 80.0f, 0}
     },
     {
-        {ELITE_NORMAL, 2.00f, 1.55f, 12, 1.10f, 1.14f, 4.0f, 0},
-        {ELITE_RARE, 3.40f, 2.15f, 22, 1.22f, 1.28f, 8.0f, 0},
-        {ELITE_LEGENDARY, 5.50f, 3.00f, 36, 1.38f, 1.42f, 20.0f, 0}
+        {ELITE_NORMAL, 2.00f, 1.55f, 12, 1.10f, 1.14f, 25.0f, 0},
+        {ELITE_RARE, 3.40f, 2.15f, 22, 1.22f, 1.28f, 60.0f, 0},
+        {ELITE_LEGENDARY, 5.50f, 3.00f, 36, 1.38f, 1.42f, 130.0f, 0}
     },
     {
-        {ELITE_NORMAL, 2.40f, 1.80f, 18, 1.12f, 1.16f, 5.0f, 0},
-        {ELITE_RARE, 4.20f, 2.60f, 32, 1.28f, 1.32f, 10.0f, 0},
-        {ELITE_LEGENDARY, 7.00f, 3.80f, 52, 1.50f, 1.48f, 25.0f, 0}
+        {ELITE_NORMAL, 2.40f, 1.80f, 18, 1.12f, 1.16f, 40.0f, 0},
+        {ELITE_RARE, 4.20f, 2.60f, 32, 1.28f, 1.32f, 100.0f, 0},
+        {ELITE_LEGENDARY, 7.00f, 3.80f, 52, 1.50f, 1.48f, 220.0f, 0}
     },
     {
-        {ELITE_NORMAL, 3.00f, 2.10f, 26, 1.15f, 1.18f, 6.0f, 0},
-        {ELITE_RARE, 5.50f, 3.20f, 45, 1.32f, 1.38f, 12.0f, 0},
-        {ELITE_LEGENDARY, 9.00f, 4.80f, 75, 1.60f, 1.58f, 30.0f, 0}
+        {ELITE_NORMAL, 3.00f, 2.10f, 26, 1.15f, 1.18f, 60.0f, 0},
+        {ELITE_RARE, 5.50f, 3.20f, 45, 1.32f, 1.38f, 150.0f, 0},
+        {ELITE_LEGENDARY, 9.00f, 4.80f, 75, 1.60f, 1.58f, 320.0f, 0}
     }
 };
 
-/* 测试配置：按旅途、经典、专家、大师、传奇顺序排列，全部提高到 100%。
+/* Mode-specific modifiers are intentionally applied on top of Terraria's
+ * own difficulty scaling.  The fourth entry is the custom Legendary profile
+ * selected only when Main.zenithWorld identifies the Zenith world. */
+static const elite_mode_modifier_t g_mode_modifiers[ELITE_MODE_COUNT] = {
+    {"普通", 1.00f, 1.00f, 0, 1.00f, 1.00f, 1.00f},
+    {"专家", 1.15f, 1.10f, 4, 1.02f, 0.90f, 1.50f},
+    {"大师", 1.35f, 1.25f, 8, 1.05f, 0.80f, 2.25f},
+    {"传奇", 1.60f, 1.45f, 12, 1.08f, 0.70f, 3.25f}
+};
+
+/* 测试配置：按普通、专家、大师、传奇顺序排列，全部提高到 100%。
  * 这样每个符合条件的普通敌怪都会尝试转化为精英怪，方便验证功能。
  * 测试完成后建议恢复为正式概率。 */
-static const int g_spawn_chance_percent[5] = {100, 100, 100, 100, 100};
+static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
+    100, 100, 100, 100
+};
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
 static size_t g_setdefaults_hook_count = 0;
@@ -121,6 +156,7 @@ static patch_hook_id_t g_loot_hooks[LOOT_HOOK_LIMIT];
 static size_t g_loot_hook_count = 0;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
+static unsigned long g_rare_reward_count = 0;
 static unsigned long g_legendary_reward_count = 0;
 
 /* SetDefaults can be called more than once for the same object.  Keep a
@@ -138,12 +174,155 @@ static size_t g_elite_instance_count = 0;
 static void *g_rewarded_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_rewarded_instance_count = 0;
 
-/* Terraria 1.4 item IDs from the target game's ItemID table. These are both
- * original Terraria items; no custom item or custom material is introduced. */
-#define ITEM_GOLDEN_CRATE 2336
-#define ITEM_GOLDEN_CRATE_HARD 3981
+/* Terraria 1.4.5.6.4 ItemID values from the target game's ItemID table.
+ * Every reward below is an original Terraria item or environment crate. */
+#define ITEM_LIFE_CRYSTAL 29
+#define ITEM_MANA_CRYSTAL 109
+#define ITEM_FALLEN_STAR 75
+#define ITEM_MAGIC_MIRROR 50
+#define ITEM_HERMES_BOOTS 54
+#define ITEM_CLOUD_IN_A_BOTTLE 53
+#define ITEM_HOOK 118
+#define ITEM_COBALT_BAR 381
+#define ITEM_MYTHRIL_BAR 382
+#define ITEM_ADAMANTITE_BAR 391
+#define ITEM_DEMON_WINGS 492
+#define ITEM_ANGEL_WINGS 493
+#define ITEM_HEALING_POTION 188
+#define ITEM_GREATER_HEALING_POTION 499
+#define ITEM_GREATER_MANA_POTION 500
+#define ITEM_SOUL_OF_LIGHT 520
+#define ITEM_SOUL_OF_NIGHT 521
+#define ITEM_SOUL_OF_FRIGHT 547
+#define ITEM_SOUL_OF_MIGHT 548
+#define ITEM_SOUL_OF_SIGHT 549
+#define ITEM_CHLOROPHYTE_ORE 947
+#define ITEM_CHLOROPHYTE_BAR 1006
+#define ITEM_HALLOWED_BAR 1225
+#define ITEM_LIFE_FRUIT 1291
+#define ITEM_TEMPLE_KEY 1141
+#define ITEM_LIHZAHRD_POWER_CELL 1293
+#define ITEM_ECTOPLASM 1508
+#define ITEM_SHROOMITE_BAR 1552
+#define ITEM_BEETLE_HUSK 2218
+#define ITEM_SPECTRE_BAR 3261
+#define ITEM_LUNAR_BAR 3467
+#define ITEM_CELESTIAL_SIGIL 3601
+
+/* Normal and hardmode variants of the original biome/environment crates. */
+#define ITEM_CORRUPT_CRATE 3203
+#define ITEM_CRIMSON_CRATE 3204
+#define ITEM_DUNGEON_CRATE 3205
+#define ITEM_SKY_CRATE 3206
+#define ITEM_HALLOWED_CRATE 3207
+#define ITEM_JUNGLE_CRATE 3208
+#define ITEM_CORRUPT_CRATE_HARD 3982
+#define ITEM_CRIMSON_CRATE_HARD 3983
+#define ITEM_DUNGEON_CRATE_HARD 3984
+#define ITEM_SKY_CRATE_HARD 3985
+#define ITEM_HALLOWED_CRATE_HARD 3986
+#define ITEM_JUNGLE_CRATE_HARD 3987
+#define ITEM_FROZEN_CRATE 4405
+#define ITEM_FROZEN_CRATE_HARD 4406
+#define ITEM_OASIS_CRATE 4407
+#define ITEM_OASIS_CRATE_HARD 4408
+#define ITEM_LAVA_CRATE 4877
+#define ITEM_LAVA_CRATE_HARD 4878
+#define ITEM_OCEAN_CRATE 5002
+#define ITEM_OCEAN_CRATE_HARD 5003
+
+typedef struct vanilla_reward_entry_t {
+    int32_t item_type;
+    int32_t min_stack;
+    int32_t max_stack;
+} vanilla_reward_entry_t;
+
+#define PROGRESS_REWARD_POOL_SIZE 8
+
+/* A rare elite gives one random original item from the current progression
+ * tier.  Pools deliberately use materials/utility items rather than custom
+ * content, and stack ranges keep the reward useful without creating a full
+ * endgame inventory in one drop. */
+static const vanilla_reward_entry_t
+    g_progress_reward_pools[5][PROGRESS_REWARD_POOL_SIZE] = {
+        {
+            {ITEM_LIFE_CRYSTAL, 1, 1},
+            {ITEM_MANA_CRYSTAL, 1, 1},
+            {ITEM_FALLEN_STAR, 3, 5},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HERMES_BOOTS, 1, 1},
+            {ITEM_CLOUD_IN_A_BOTTLE, 1, 1},
+            {ITEM_HOOK, 1, 1},
+            {ITEM_HEALING_POTION, 2, 4}
+        },
+        {
+            {ITEM_COBALT_BAR, 2, 4},
+            {ITEM_MYTHRIL_BAR, 2, 4},
+            {ITEM_ADAMANTITE_BAR, 2, 4},
+            {ITEM_SOUL_OF_LIGHT, 3, 6},
+            {ITEM_SOUL_OF_NIGHT, 3, 6},
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_GREATER_HEALING_POTION, 3, 6}
+        },
+        {
+            {ITEM_HALLOWED_BAR, 2, 4},
+            {ITEM_CHLOROPHYTE_ORE, 8, 16},
+            {ITEM_CHLOROPHYTE_BAR, 2, 4},
+            {ITEM_SOUL_OF_FRIGHT, 3, 6},
+            {ITEM_SOUL_OF_MIGHT, 3, 6},
+            {ITEM_SOUL_OF_SIGHT, 3, 6},
+            {ITEM_LIFE_FRUIT, 1, 1},
+            {ITEM_GREATER_MANA_POTION, 3, 6}
+        },
+        {
+            {ITEM_ECTOPLASM, 2, 4},
+            {ITEM_SPECTRE_BAR, 2, 4},
+            {ITEM_SHROOMITE_BAR, 2, 4},
+            {ITEM_TEMPLE_KEY, 1, 1},
+            {ITEM_CHLOROPHYTE_BAR, 3, 6},
+            {ITEM_LIHZAHRD_POWER_CELL, 1, 2},
+            {ITEM_LIFE_FRUIT, 1, 1},
+            {ITEM_GREATER_HEALING_POTION, 4, 8}
+        },
+        {
+            {ITEM_LUNAR_BAR, 2, 5},
+            {ITEM_CELESTIAL_SIGIL, 1, 1},
+            {ITEM_ECTOPLASM, 3, 6},
+            {ITEM_BEETLE_HUSK, 2, 4},
+            {ITEM_SHROOMITE_BAR, 2, 5},
+            {ITEM_CHLOROPHYTE_BAR, 4, 8},
+            {ITEM_LIFE_FRUIT, 1, 1},
+            {ITEM_GREATER_HEALING_POTION, 5, 10}
+        }
+    };
+
+#define PRE_HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE 9
+#define HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE 10
+
+static const int32_t g_pre_hardmode_environment_crates[
+    PRE_HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE] = {
+        ITEM_CORRUPT_CRATE, ITEM_CRIMSON_CRATE, ITEM_DUNGEON_CRATE,
+        ITEM_SKY_CRATE, ITEM_JUNGLE_CRATE, ITEM_FROZEN_CRATE,
+        ITEM_OASIS_CRATE, ITEM_LAVA_CRATE, ITEM_OCEAN_CRATE
+    };
+
+static const int32_t g_hardmode_environment_crates[
+    HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE] = {
+        ITEM_CORRUPT_CRATE_HARD, ITEM_CRIMSON_CRATE_HARD,
+        ITEM_DUNGEON_CRATE_HARD, ITEM_SKY_CRATE_HARD,
+        ITEM_HALLOWED_CRATE_HARD, ITEM_JUNGLE_CRATE_HARD,
+        ITEM_FROZEN_CRATE_HARD, ITEM_OASIS_CRATE_HARD,
+        ITEM_LAVA_CRATE_HARD, ITEM_OCEAN_CRATE_HARD
+    };
+
+/* A 30% chance keeps an environment crate exciting and valuable without
+ * making every legendary kill a guaranteed crate farm. */
+#define LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT 30
 
 static patch_handle_t g_main_game_mode_field = NULL;
+static patch_handle_t g_main_game_mode_getter = NULL;
+static patch_handle_t g_main_zenith_world_field = NULL;
 static patch_handle_t g_main_hard_mode_field = NULL;
 static patch_handle_t g_main_net_mode_field = NULL;
 static patch_handle_t g_main_player_field = NULL;
@@ -187,6 +366,11 @@ static bool g_progress_fields_logged = false;
 
 static int random_percent(void) {
     return rand() % 100;
+}
+
+static int32_t random_range_i32(int32_t minimum, int32_t maximum) {
+    if (maximum <= minimum) return minimum;
+    return minimum + (int32_t)(rand() % (maximum - minimum + 1));
 }
 
 static int32_t scaled_i32(int32_t value, float multiplier) {
@@ -250,6 +434,19 @@ static bool set_field_value(patch_handle_t field, patch_handle_t instance,
 static bool read_i32(patch_handle_t field, patch_handle_t instance, int32_t *out) {
     if (!out || !valid_field(field, PATCH_INT32)) return false;
     return get_field_value(field, instance, out);
+}
+
+static bool read_static_i32_method(patch_handle_t method, int32_t *out) {
+    if (!method || !out || !patchlib_is_valid(method)) return false;
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return false;
+    bool supported = !sig.is_instance && sig.return_type == PATCH_INT32 &&
+                     tefstd_vector_size(&sig.arg_types) == 0;
+    patchlib_method_signature_free(&sig);
+    if (!supported) return false;
+
+    return patchlib_method_invoke_args(method, PATCH_NULL, out, NULL);
 }
 
 static bool read_bool(patch_handle_t field, patch_handle_t instance, bool *out) {
@@ -406,9 +603,27 @@ static void remember_rewarded(void *instance) {
     }
 }
 
-static elite_profile_t make_profile(elite_progress_t progress) {
+static elite_world_mode_t profile_mode_for_game_mode(int game_mode) {
+    if (game_mode == 1) return ELITE_MODE_EXPERT;
+    if (game_mode == 2) return ELITE_MODE_MASTER;
+    /* GameModeID.Creative/Journey (3) has no custom difficulty mapping. */
+    return ELITE_MODE_NORMAL;
+}
+
+static const char *world_mode_name(elite_world_mode_t mode) {
+    if (mode < ELITE_MODE_NORMAL || mode >= ELITE_MODE_COUNT) {
+        return g_mode_modifiers[ELITE_MODE_NORMAL].name;
+    }
+    return g_mode_modifiers[mode].name;
+}
+
+static elite_profile_t make_profile(elite_progress_t progress,
+                                    elite_world_mode_t mode) {
     if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
         progress = PROGRESS_PRE_HARDMODE;
+    }
+    if (mode < ELITE_MODE_NORMAL || mode >= ELITE_MODE_COUNT) {
+        mode = ELITE_MODE_NORMAL;
     }
 
     int rank_roll = random_percent();
@@ -420,6 +635,13 @@ static elite_profile_t make_profile(elite_progress_t progress) {
     }
 
     elite_profile_t p = g_progress_profiles[progress][rank_index];
+    const elite_mode_modifier_t *mode_modifier = &g_mode_modifiers[mode];
+    p.health_multiplier *= mode_modifier->health_multiplier;
+    p.damage_multiplier *= mode_modifier->damage_multiplier;
+    p.defense_bonus += mode_modifier->defense_bonus;
+    p.scale_multiplier *= mode_modifier->scale_multiplier;
+    p.knockback_multiplier *= mode_modifier->knockback_multiplier;
+    p.gold_multiplier *= mode_modifier->gold_multiplier;
     if (p.rank == ELITE_LEGENDARY) {
         p.affix_mask = (1u << AFFIX_ABYSSAL) | (1u << AFFIX_ENRAGED) |
                        (1u << AFFIX_FLAME) | (1u << AFFIX_SPLIT);
@@ -432,20 +654,27 @@ static elite_profile_t make_profile(elite_progress_t progress) {
     return p;
 }
 
-/* 生成 Hook 接入后调用此函数；world_mode: 0=旅途,1=经典,2=专家,3=大师,4=传奇。 */
+/* 生成 Hook 接入后调用此函数；GameModeID: 0=普通,1=专家,2=大师,
+ * 3=旅途。天顶世界由 Main.zenithWorld 覆盖为自定义传奇属性档。 */
 static int elite_should_spawn(int world_mode) {
     if (world_mode < 0) world_mode = 0;
-    if (world_mode > 4) world_mode = 4;
+    if (world_mode >= ELITE_MODE_COUNT) world_mode = ELITE_MODE_COUNT - 1;
     return random_percent() < g_spawn_chance_percent[world_mode];
 }
 
 static int current_world_mode(void) {
-    int32_t mode = 1; /* classic is the safe fallback when Main is unavailable */
-    if (g_main_game_mode_field) {
-        (void)read_i32(g_main_game_mode_field, NULL, &mode);
+    int32_t raw_mode = ELITE_MODE_NORMAL;
+    if (valid_field(g_main_game_mode_field, PATCH_INT32)) {
+        (void)read_i32(g_main_game_mode_field, NULL, &raw_mode);
+    } else if (g_main_game_mode_getter) {
+        (void)read_static_i32_method(g_main_game_mode_getter, &raw_mode);
     }
-    if (mode < 0) mode = 0;
-    if (mode > 4) mode = 4;
+    if (raw_mode < 0 || raw_mode > 3) raw_mode = ELITE_MODE_NORMAL;
+
+    elite_world_mode_t mode = profile_mode_for_game_mode((int)raw_mode);
+    bool zenith_world = false;
+    (void)read_bool(g_main_zenith_world_field, NULL, &zenith_world);
+    if (zenith_world) mode = ELITE_MODE_LEGENDARY;
     return (int)mode;
 }
 
@@ -560,12 +789,31 @@ static int32_t target_player_index(patch_handle_t instance) {
     return -1;
 }
 
-static int legendary_reward_item(elite_progress_t progress) {
-    /* Before hardmode, give the original Golden Crate. From hardmode onward,
-     * give the original hardmode Golden Crate (Titanium Crate). */
-    return progress == PROGRESS_PRE_HARDMODE
-               ? ITEM_GOLDEN_CRATE
-               : ITEM_GOLDEN_CRATE_HARD;
+static bool select_rare_progress_reward(elite_progress_t progress,
+                                        int32_t *item_type,
+                                        int32_t *item_stack) {
+    if (!item_type || !item_stack) return false;
+    if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
+        progress = PROGRESS_PRE_HARDMODE;
+    }
+
+    const vanilla_reward_entry_t *pool = g_progress_reward_pools[progress];
+    size_t entry_index = (size_t)(rand() % PROGRESS_REWARD_POOL_SIZE);
+    const vanilla_reward_entry_t *entry = &pool[entry_index];
+    *item_type = entry->item_type;
+    *item_stack = random_range_i32(entry->min_stack, entry->max_stack);
+    return *item_type > 0 && *item_stack > 0;
+}
+
+static int32_t legendary_environment_crate(elite_progress_t progress) {
+    if (progress == PROGRESS_PRE_HARDMODE) {
+        size_t index = (size_t)(rand() %
+                                PRE_HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE);
+        return g_pre_hardmode_environment_crates[index];
+    }
+
+    size_t index = (size_t)(rand() % HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE);
+    return g_hardmode_environment_crates[index];
 }
 
 static elite_behavior_t detect_behavior(patch_handle_t instance) {
@@ -676,10 +924,12 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (read_bool(g_field_boss, instance, &value) && value) return;
 
     remember_processed(instance);
-    if (!elite_should_spawn(current_world_mode())) return;
+    int profile_mode_value = current_world_mode();
+    if (!elite_should_spawn(profile_mode_value)) return;
 
     elite_progress_t progress = current_progress();
-    elite_profile_t profile = make_profile(progress);
+    elite_world_mode_t profile_mode = (elite_world_mode_t)profile_mode_value;
+    elite_profile_t profile = make_profile(progress, profile_mode);
     int32_t life = life_max;
     (void)read_i32(g_field_life, instance, &life);
 
@@ -750,41 +1000,73 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Elite NPC transformed: type=%d progress=%s rank=%d gold=%.1fx affixes=0x%X total=%lu",
-                  (int)npc_type, progress_name(progress), (int)profile.rank,
+                  "Elite NPC transformed: type=%d mode=%s progress=%s rank=%d gold=%.1fx affixes=0x%X total=%lu",
+                  (int)npc_type, world_mode_name(profile_mode),
+                  progress_name(progress), (int)profile.rank,
                   (double)profile.gold_multiplier,
                   (unsigned)profile.affix_mask, g_elite_count);
     }
 }
 
-/* NPCLoot runs after Terraria has processed the original loot. Legendary
- * elites add one progression-appropriate vanilla crate on top of that loot.
- * The instance guard prevents a repeated NPCLoot call from duplicating it. */
+/* NPCLoot runs after Terraria has processed the original loot. Rare elites
+ * add one random current-progress vanilla item; legendary elites have a 30%
+ * chance to add one random environment crate. The instance guard prevents a
+ * repeated NPCLoot call from duplicating either reward. */
 static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
                              const patch_method_signature_t *sig_info) {
     (void)args;
     (void)result;
     (void)sig_info;
-    if (!instance || !is_elite_instance(instance) ||
-        elite_rank_for_instance(instance) != ELITE_LEGENDARY ||
-        already_rewarded(instance)) {
+    if (!instance || !is_elite_instance(instance) || already_rewarded(instance)) {
         return;
     }
+
+    elite_rank_t rank = elite_rank_for_instance(instance);
+    if (rank != ELITE_RARE && rank != ELITE_LEGENDARY) return;
 
     remember_rewarded(instance);
     if (!reward_drop_allowed()) return;
 
     elite_progress_t progress = current_progress();
-    int item_type = legendary_reward_item(progress);
+    if (rank == ELITE_RARE) {
+        int32_t item_type = 0;
+        int32_t item_stack = 0;
+        if (select_rare_progress_reward(progress, &item_type, &item_stack) &&
+            spawn_vanilla_reward(instance, item_type, item_stack)) {
+            ++g_rare_reward_count;
+            ELITE_LOG(
+                MOD_LOG_LEVEL_INFO,
+                "Rare progress reward dropped: item=%d stack=%d progress=%s total=%lu",
+                (int)item_type, (int)item_stack, progress_name(progress),
+                g_rare_reward_count);
+        } else {
+            ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                      "Rare progress reward could not be spawned: progress=%s",
+                      progress_name(progress));
+        }
+        return;
+    }
+
+    if (random_percent() >= LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT) {
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Legendary environment crate missed: chance=%d%% progress=%s",
+                  LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT,
+                  progress_name(progress));
+        return;
+    }
+
+    int32_t item_type = legendary_environment_crate(progress);
     if (spawn_vanilla_reward(instance, item_type, 1)) {
         ++g_legendary_reward_count;
-        ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Legendary vanilla reward dropped: item=%d progress=%s total=%lu",
-                  item_type, progress_name(progress), g_legendary_reward_count);
+        ELITE_LOG(
+            MOD_LOG_LEVEL_INFO,
+            "Legendary environment crate dropped: item=%d chance=%d%% progress=%s total=%lu",
+            (int)item_type, LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT,
+            progress_name(progress), g_legendary_reward_count);
     } else {
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Legendary reward could not be spawned: item=%d progress=%s",
-                  item_type, progress_name(progress));
+                  "Legendary environment crate could not be spawned: item=%d progress=%s",
+                  (int)item_type, progress_name(progress));
     }
 }
 
@@ -868,6 +1150,30 @@ static void cache_npc_fields(patch_handle_t npc) {
         if (!g_main_game_mode_field || !patchlib_is_valid(g_main_game_mode_field)) {
             g_main_game_mode_field = patchlib_type_get_field(main_type, "gameMode");
         }
+        if (!g_main_game_mode_field || !patchlib_is_valid(g_main_game_mode_field)) {
+            patch_handle_t game_mode_property = patchlib_type_get_property(
+                main_type, "GameMode");
+            if (game_mode_property && patchlib_is_valid(game_mode_property)) {
+                g_main_game_mode_getter =
+                    patchlib_property_get_get_method(game_mode_property);
+                if (!g_main_game_mode_getter ||
+                    !patchlib_is_valid(g_main_game_mode_getter)) {
+                    g_main_game_mode_getter = NULL;
+                }
+            }
+            if (!g_main_game_mode_getter) {
+                g_main_game_mode_getter = patchlib_type_get_method(
+                    main_type, "get_GameMode");
+                if (!g_main_game_mode_getter ||
+                    !patchlib_is_valid(g_main_game_mode_getter)) {
+                    g_main_game_mode_getter = NULL;
+                }
+            }
+        }
+        /* Main.zenithWorld is the vanilla flag for the Zenith/fixed-boi
+         * world.  It is the only trigger for Legendary. */
+        g_main_zenith_world_field = patchlib_type_get_field(
+            main_type, "zenithWorld");
         g_main_hard_mode_field = patchlib_type_get_field(main_type, "hardMode");
         if (!g_main_hard_mode_field || !patchlib_is_valid(g_main_hard_mode_field)) {
             g_main_hard_mode_field = patchlib_type_get_field(main_type, "HardMode");
@@ -893,7 +1199,10 @@ static void cache_npc_fields(patch_handle_t npc) {
 
     if (!g_progress_fields_logged) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Progress fields: hardMode=%d mech=%d plant=%d golem=%d moonlord=%d",
+                  "Progress fields: gameModeField=%d gameModeGetter=%d zenithWorld=%d hardMode=%d mech=%d plant=%d golem=%d moonlord=%d",
+                  g_main_game_mode_field != NULL,
+                  g_main_game_mode_getter != NULL,
+                  g_main_zenith_world_field != NULL,
                   g_main_hard_mode_field != NULL,
                   g_npc_downed_mech_field != NULL,
                   g_npc_downed_plant_field != NULL,
@@ -973,16 +1282,16 @@ static void discover_reward_api(patch_handle_t npc, patch_handle_t item_type) {
             }
             patchlib_method_signature_free(&loot_sig);
         }
-    } else {
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "NPC.NPCLoot method not found; legendary crate reward disabled");
+        } else {
+            ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                      "NPC.NPCLoot method not found; rare/environment rewards disabled");
     }
 
     g_item_new_item_method = patchlib_type_get_method_by_param_count(
         item_type, "NewItem", 9);
     if (!g_item_new_item_method || !patchlib_is_valid(g_item_new_item_method)) {
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Item.NewItem(X,Y,Width,Height,Type,Stack,...) not found; legendary crate reward disabled");
+                  "Item.NewItem(X,Y,Width,Height,Type,Stack,...) not found; rare/environment rewards disabled");
         g_item_new_item_method = NULL;
         return;
     }
@@ -990,7 +1299,7 @@ static void discover_reward_api(patch_handle_t npc, patch_handle_t item_type) {
     patch_method_signature_t item_sig = {0};
     if (!patchlib_method_get_signature(g_item_new_item_method, &item_sig)) {
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Item.NewItem signature unavailable; legendary crate reward disabled");
+                  "Item.NewItem signature unavailable; rare/environment rewards disabled");
         g_item_new_item_method = NULL;
         return;
     }
@@ -1575,7 +1884,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
                 discover_reward_api(npc, item_type);
             } else {
                 ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                          "Terraria.Item type not found; legendary crate reward disabled");
+                          "Terraria.Item type not found; rare/environment rewards disabled");
             }
         }
     }
@@ -1606,21 +1915,24 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_loot_hooks[i]);
     }
     g_loot_hook_count = 0;
+    g_main_game_mode_getter = NULL;
+    g_main_zenith_world_field = NULL;
     g_item_new_item_method = NULL;
     g_processed_instance_count = 0;
     g_elite_instance_count = 0;
     g_rewarded_instance_count = 0;
     g_setdefaults_calls = 0;
     g_elite_count = 0;
+    g_rare_reward_count = 0;
     g_legendary_reward_count = 0;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083120,
+    .version_code = 2026083121,
     .api_version = 1,
-    .version = "1.1.0"
+    .version = "1.2.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
