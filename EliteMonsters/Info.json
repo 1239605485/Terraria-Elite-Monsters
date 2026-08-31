@@ -1,8 +1,8 @@
 {
   "pkgId": "eternal.future.elitemonsters",
   "name": "Elite Monsters（分级精英怪）",
-  "version": "1.0.3",
-  "versionCode": 2026083113,
+  "version": "1.0.4",
+  "versionCode": 2026083114,
   "author": "liuxin",
   "brieflyDescribe": "带有强化AI的进度成长精英怪：白色普通、蓝色稀有、紫色传奇。",
   "description": "Elite Monsters 根据游戏进度和精英等级动态强化敌怪属性，并通过原版AI增强目标追踪与精英冲刺行为。",

@@ -714,6 +714,32 @@ static bool install_ai_hook(patch_handle_t method, const char *name) {
     return true;
 }
 
+/* The Terraria 1.4.5.6.4 metadata identifies NPC.AI as the parameterless
+ * dispatcher. Let the kernel validate its own MethodInfo when installing this
+ * known method; older API builds can report its hidden MethodInfo argument
+ * incorrectly through the public signature helper. */
+static bool install_known_ai_hook(patch_handle_t method, const char *name) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_ai_hook_count >= AI_HOOK_LIMIT) {
+        return false;
+    }
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, ai_postfix);
+    if (hook_id == PATCH_HOOK_INVALID_ID) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Known NPC AI hook failed: name=%s", name);
+        return false;
+    }
+
+    g_ai_hooks[g_ai_hook_count++] = hook_id;
+    g_ai_method_token = patchlib_method_get_token(method);
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Known NPC AI hook installed: name=%s id=%d",
+              name, (int)hook_id);
+    return true;
+}
+
 static void discover_ai_api(patch_handle_t npc) {
     /* Method names differ between Terraria IL2CPP exports. In particular,
      * some builds expose NPC AI as AI_007 instead of AI, and parameter-count
@@ -733,7 +759,8 @@ static void discover_ai_api(patch_handle_t npc) {
      * this exact method first so the postfix runs for every NPC AI style. */
     patch_handle_t direct = patchlib_type_get_method_by_param_count(
         npc, "AI", 0);
-    if (direct && install_ai_hook(direct, "AI")) {
+    if (!direct) direct = patchlib_type_get_method(npc, "AI");
+    if (direct && install_known_ai_hook(direct, "AI")) {
         tefstd_vector_destroy(&methods);
         return;
     }
@@ -846,9 +873,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083113,
+    .version_code = 2026083114,
     .api_version = 1,
-    .version = "1.0.3"
+    .version = "1.0.4"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
