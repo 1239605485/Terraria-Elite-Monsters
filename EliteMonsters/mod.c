@@ -68,6 +68,7 @@ static unsigned long g_elite_count = 0;
 static void *g_processed_instances[PROCESSED_INSTANCE_LIMIT];
 static size_t g_processed_instance_count = 0;
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
+static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
 
 static patch_handle_t g_main_game_mode_field = NULL;
@@ -149,35 +150,49 @@ static bool is_elite_instance(void *instance) {
     return false;
 }
 
-static void remember_elite_instance(void *instance) {
+static void remember_elite_instance(void *instance, elite_rank_t rank) {
     if (!instance || is_elite_instance(instance)) return;
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
-        g_elite_instances[g_elite_instance_count++] = instance;
+        g_elite_instances[g_elite_instance_count] = instance;
+        g_elite_ranks[g_elite_instance_count] = rank;
+        ++g_elite_instance_count;
     } else {
-        g_elite_instances[g_elite_count % PROCESSED_INSTANCE_LIMIT] = instance;
+        size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
+        g_elite_instances[slot] = instance;
+        g_elite_ranks[slot] = rank;
     }
 }
 
+static elite_rank_t elite_rank_for_instance(void *instance) {
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (g_elite_instances[i] == instance) return g_elite_ranks[i];
+    }
+    return ELITE_NORMAL;
+}
+
 static elite_profile_t make_profile(int world_mode) {
-    elite_profile_t p = { ELITE_NORMAL, 1.25f, 1.20f, 0.90f, 1.05f, 1.20f, 0 };
+    /* Every world mode can roll all three ranks. The separate spawn chance
+     * still controls whether an NPC becomes elite at all. */
+    elite_profile_t p = { ELITE_NORMAL, 1.50f, 1.25f, 1.10f, 1.05f, 1.10f, 0 };
     int roll = random_percent();
 
-    if (world_mode >= 4 && roll < 3) {
+    (void)world_mode;
+    if (roll < 5) {
         p.rank = ELITE_LEGENDARY;
-        p.health_multiplier = 10.0f;
-        p.damage_multiplier = 5.0f;
-        p.defense_multiplier = 0.65f;
+        p.health_multiplier = 5.0f;
+        p.damage_multiplier = 2.50f;
+        p.defense_multiplier = 1.60f;
         p.speed_multiplier = 1.45f;
-        p.scale_multiplier = 3.0f;
+        p.scale_multiplier = 1.50f;
         p.affix_mask = (1u << AFFIX_ABYSSAL) | (1u << AFFIX_ENRAGED) |
                        (1u << AFFIX_FLAME) | (1u << AFFIX_SPLIT);
-    } else if (world_mode >= 2 && roll < 20) {
+    } else if (roll < 30) {
         p.rank = ELITE_RARE;
         p.health_multiplier = 2.5f;
-        p.damage_multiplier = 1.8f;
-        p.defense_multiplier = 0.80f;
+        p.damage_multiplier = 1.75f;
+        p.defense_multiplier = 1.30f;
         p.speed_multiplier = 1.20f;
-        p.scale_multiplier = 1.50f;
+        p.scale_multiplier = 1.25f;
         p.affix_mask = (1u << (random_percent() % 5)) |
                        (1u << (random_percent() % 5));
     } else {
@@ -285,7 +300,7 @@ static void apply_elite_profile(patch_handle_t instance) {
 
     /* Keep the instance marked even if a field is unavailable in this game
      * build. The name and drawing hooks still need to identify the NPC. */
-    remember_elite_instance(instance);
+    remember_elite_instance(instance, profile.rank);
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -296,7 +311,7 @@ static void apply_elite_profile(patch_handle_t instance) {
 }
 
 /* Add a visible marker at the NPC name source. The MouseText hook below also
- * applies a red rarity directly, so this works even when the Android build
+ * applies a rank-specific vanilla rarity directly, so this works even when the Android build
  * does not parse [c/...] tags in the NPC hover renderer. */
 static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
                              const patch_method_signature_t *sig_info) {
@@ -311,16 +326,21 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
         free(name);
         return;
     }
-    if (strstr(name, "【精英】") != NULL) {
+    if (strstr(name, "精英·") != NULL ||
+        strstr(name, "稀有·") != NULL ||
+        strstr(name, "传奇·") != NULL) {
         free(name);
         return;
     }
 
     char decorated[512];
     /* Do not put [c/...] into the NPC name: this Android build displays the
-     * tag literally. Main.MouseText applies the red color separately. */
-    (void)snprintf(decorated, sizeof(decorated),
-                   "【精英】 %s", name);
+ * tag literally. Main.MouseText applies the rank color separately. */
+    const char *prefix = "精英·";
+    elite_rank_t rank = elite_rank_for_instance(instance);
+    if (rank == ELITE_RARE) prefix = "稀有·";
+    if (rank == ELITE_LEGENDARY) prefix = "传奇·";
+    (void)snprintf(decorated, sizeof(decorated), "%s%s", prefix, name);
     patch_handle_t replacement = patchlib_string_create(decorated);
     if (replacement && patchlib_is_valid(replacement)) {
         *(patch_handle_t *)result = replacement;
@@ -439,8 +459,8 @@ static void discover_name_api(patch_handle_t npc) {
 }
 
 /* Main.MouseText receives the final hover string and an integer rarity.
- * Rarity 10 is rendered red/pink by vanilla Terraria. This direct color path
- * is used in addition to the [c/...] text tag for Android compatibility. */
+ * Vanilla rarity 0 is white, 1 is blue, and 11 is purple. This direct color
+ * path avoids putting [c/...] markup into the NPC name on Android. */
 static bool mouse_text_prefix(patch_handle_t instance, void **args,
                               const patch_method_signature_t *sig_info,
                               void *result) {
@@ -456,15 +476,22 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
     char *text = patchlib_string_cstr(text_handle);
     if (!text) return false;
 
-    const bool is_elite_name = strstr(text, "【精英】") != NULL;
+    int rarity = -1;
+    if (strstr(text, "传奇·") != NULL) {
+        rarity = 11;
+    } else if (strstr(text, "稀有·") != NULL) {
+        rarity = 1;
+    } else if (strstr(text, "精英·") != NULL) {
+        rarity = 0;
+    }
     free(text);
-    if (!is_elite_name) return false;
+    if (rarity < 0) return false;
 
     const size_t arg_count = tefstd_vector_size(&sig_info->arg_types);
     /* MouseText(string, int, byte, ...) and
      * MouseText(string, string, int, byte, ...). */
     const size_t rare_index = (arg_count >= 10) ? 2 : 1;
-    if (args[rare_index]) *(int *)args[rare_index] = 10;
+    if (args[rare_index]) *(int *)args[rare_index] = rarity;
     return false;
 }
 
@@ -530,9 +557,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026083107,
+    .version_code = 2026083108,
     .api_version = 1,
-    .version = "0.7.0"
+    .version = "0.8.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
