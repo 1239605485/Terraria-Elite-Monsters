@@ -1,14 +1,10 @@
-# EliteMonsters 1.2.3 正式版（liuxin 四档难度与进度奖励版）
+# EliteMonsters 1.3.0（四档精英怪与地形变异版）
 
-This version is authored by `liuxin`. The mod filters friendly, town, and boss
-NPCs, applies the configured world-mode chance, and prevents repeat
-transformation of the same instance. The profile reads both game mode and
-world progress. The four mod profiles are Normal, Expert, Master, and
-Legendary; because Terraria has no native Legendary GameModeID, the custom
-Legendary profile is enabled by Main.zenithWorld in the Zenith/fixed-boi
-special-seed world. Creative/Journey remains on the Normal profile. Progress is
-split into pre-hardmode, early hardmode, pre-Plantera, post-Plantera, and
-endgame. Eligible enemies roll one of three ranks at every progress stage:
+This version is authored by `liuxin`. The mod keeps the four difficulty profiles,
+progress-scaled elite NPCs, original rewards and legendary AI. It also adds a
+modular biome mutation layer. Each world deterministically receives three global
+rules from its worldID, and each target player's current biome applies a unique
+elite damage, defense, healing or movement modifier.
 
 - normal elite: `精英·怪物`, white name; from 1.4x/1.15x/+4 defense and
   10x coins in pre-hardmode to 3x/2.1x/+26 defense and 60x coins in endgame;
@@ -55,9 +51,6 @@ cmake -S . -B build \
 cmake --build build --config Release --target EliteMonsters -j2
 ```
 
-The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.2.2 directly asks TEFKernel to hook the known
-parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
-rare progress reward and guaranteed legendary crate distribution (70% common,
-30% current-environment), and uses the
-primitive-argument `Item.NewItem` overload to create vanilla items safely.
+The source is split into `elite_core.c`, `elite_ai.c`, `elite_rewards.c` and
+`biome_mutations.c`. The existing GitHub Actions workflow builds and assembles
+the installable ARM64 package.
