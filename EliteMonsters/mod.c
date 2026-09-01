@@ -146,6 +146,7 @@ static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
 #define ENABLE_NAME_SOURCE_HOOK 1
 static unsigned long g_npc_name_calls = 0;
+static patch_handle_t g_language_name_method = NULL;
 static bool g_pending_name_valid = false;
 static char g_pending_source_name[512];
 static char g_pending_decorated_name[512];
@@ -171,6 +172,7 @@ static unsigned long g_elite_count = 0;
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_active[PROCESSED_INSTANCE_LIMIT];
 static int32_t g_elite_types[PROCESSED_INSTANCE_LIMIT];
+static char g_elite_source_names[PROCESSED_INSTANCE_LIMIT][256];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
 static elite_behavior_t g_elite_behaviors[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
@@ -644,6 +646,7 @@ static void clear_elite_instance(void *instance) {
     if (slot >= PROCESSED_INSTANCE_LIMIT) return;
     g_elite_active[slot] = false;
     g_elite_types[slot] = 0;
+    memset(g_elite_source_names[slot], 0, sizeof(g_elite_source_names[slot]));
     g_elite_rewarded[slot] = false;
     g_elite_reward_mask[slot] = 0;
     g_elite_spawn_announced[slot] = false;
@@ -1302,6 +1305,17 @@ static void apply_elite_profile(patch_handle_t instance) {
      * build. The name and drawing hooks still need to identify the NPC. */
     remember_elite_instance(instance, profile.rank, detect_behavior(instance),
                             elite_damage, profile.affix_mask, npc_type);
+
+    /* Warm the vanilla name cache immediately. This makes the later
+     * Main.MouseText fallback independent of whether this particular UI
+     * path calls the hooked Lang method before drawing the tooltip. */
+    if (g_language_name_method && patchlib_is_valid(g_language_name_method)) {
+        int32_t name_type = npc_type;
+        patch_handle_t ignored_name = NULL;
+        void *name_args[1] = {&name_type};
+        (void)patchlib_method_invoke_args(g_language_name_method, PATCH_NULL,
+                                           &ignored_name, name_args);
+    }
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1485,6 +1499,31 @@ static bool elite_profile_for_type(int32_t npc_type, elite_rank_t *rank,
     return true;
 }
 
+static void cache_elite_source_name(int32_t npc_type, const char *name) {
+    if (!name || !name[0]) return;
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (!g_elite_active[i] || g_elite_types[i] != npc_type) continue;
+        (void)snprintf(g_elite_source_names[i],
+                       sizeof(g_elite_source_names[i]), "%s", name);
+    }
+}
+
+static bool compose_elite_name(char *buffer, size_t capacity,
+                               const char *name, elite_rank_t rank,
+                               uint32_t affix_mask) {
+    if (!buffer || capacity == 0 || !name) return false;
+    const char *prefix = "精英·";
+    if (rank == ELITE_RARE) prefix = "稀有·";
+    if (rank == ELITE_LEGENDARY) prefix = "传奇·";
+    int written = snprintf(buffer, capacity, "%s", prefix);
+    if (written < 0 || (size_t)written >= capacity) return false;
+    size_t offset = (size_t)written;
+    offset = append_affix_labels(buffer, capacity, offset, affix_mask);
+    if (offset >= capacity) return false;
+    written = snprintf(buffer + offset, capacity - offset, "%s", name);
+    return written >= 0 && (size_t)written < capacity - offset;
+}
+
 /* Add a visible marker at the NPC name source. The MouseText hook below also
  * applies a rank-specific vanilla rarity directly, so this works even when the Android build
  * does not parse [c/...] tags in the NPC hover renderer. */
@@ -1508,6 +1547,11 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
         strstr(name, "传奇·") != NULL) {
         free(name);
         return;
+    }
+
+    int32_t npc_type = 0;
+    if (read_i32(g_field_type, instance, &npc_type)) {
+        cache_elite_source_name(npc_type, name);
     }
 
     char decorated[512];
@@ -1569,6 +1613,8 @@ static void npc_language_name_postfix(patch_handle_t instance, void **args,
         free(name);
         return;
     }
+
+    cache_elite_source_name(npc_type, name);
 
     const char *prefix = "精英·";
     if (rank == ELITE_RARE) prefix = "稀有·";
@@ -1913,6 +1959,7 @@ static bool install_language_name_hook(void) {
     g_npc_name_hooks[0] = hook_id;
     g_npc_name_tokens[0] = patchlib_method_get_token(method);
     g_npc_name_hook_count = 1;
+    g_language_name_method = method;
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
               "NPC language name hook installed: GetNPCNameValue id=%d",
               (int)hook_id);
@@ -2027,6 +2074,7 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
     if (!text) return true;
 
     const char *effective_text = text;
+    char direct_decorated_name[512];
     bool injected_name = false;
     if (g_pending_name_valid) {
         if (strcmp(text, g_pending_source_name) == 0) {
@@ -2041,6 +2089,34 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
             /* Do not let a name obtained in an unrelated UI path decorate a
              * later tooltip. */
             g_pending_name_valid = false;
+        }
+    }
+
+    /* Final display fallback: compare the string passed to MouseText with
+     * the vanilla name cached for each active elite type. This path works
+     * even when Terraria ignores a string returned by an NPC/Lang postfix. */
+    if (!injected_name &&
+        strstr(effective_text, "精英·") == NULL &&
+        strstr(effective_text, "稀有·") == NULL &&
+        strstr(effective_text, "传奇·") == NULL) {
+        for (size_t i = 0; i < g_elite_instance_count; ++i) {
+            if (!g_elite_active[i] || !g_elite_source_names[i][0] ||
+                strcmp(effective_text, g_elite_source_names[i]) != 0) {
+                continue;
+            }
+            if (compose_elite_name(direct_decorated_name,
+                                   sizeof(direct_decorated_name),
+                                   effective_text, g_elite_ranks[i],
+                                   g_elite_affix_masks[i])) {
+                patch_handle_t replacement =
+                    patchlib_string_create(direct_decorated_name);
+                if (replacement && patchlib_is_valid(replacement)) {
+                    *(patch_handle_t *)args[0] = replacement;
+                    effective_text = direct_decorated_name;
+                    injected_name = true;
+                }
+            }
+            break;
         }
     }
 
@@ -2700,6 +2776,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
     g_main_new_text_method = NULL;
+    g_language_name_method = NULL;
     g_item_new_item_method = NULL;
     g_field_color = NULL;
     g_field_who_am_i = NULL;
@@ -2710,6 +2787,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     memset(g_elite_instances, 0, sizeof(g_elite_instances));
     memset(g_elite_active, 0, sizeof(g_elite_active));
     memset(g_elite_types, 0, sizeof(g_elite_types));
+    memset(g_elite_source_names, 0, sizeof(g_elite_source_names));
     memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
     memset(g_elite_reward_mask, 0, sizeof(g_elite_reward_mask));
     memset(g_elite_spawn_announced, 0, sizeof(g_elite_spawn_announced));
@@ -2726,9 +2804,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090112,
+    .version_code = 2026090113,
     .api_version = 1,
-    .version = "1.4.4"
+    .version = "1.4.5"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

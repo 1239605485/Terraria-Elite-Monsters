@@ -1,4 +1,4 @@
-# EliteMonsters 1.4.4 正式版（liuxin 四档难度、词缀、名称显示、技能与战利品版）
+# EliteMonsters 1.4.5 正式版（liuxin 四档难度、词缀、名称显示、技能与战利品版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -46,7 +46,7 @@ clients do not duplicate teleports. If a game build does not expose a safe
 `velocity`, `position`, or `Main.player` field, the affected movement is
 skipped while the rest of the mod remains active.
 
-Version 1.4.4 includes six visible affixes. Flame increases damage and periodically
+Version 1.4.5 includes six visible affixes. Flame increases damage and periodically
 dashes, Frost adds defense and knockback resistance, Vampiric periodically heals,
 Split triggers one half-health second wind and dash, Enraged adds the low-health
 damage phase to non-legendary ranks, and Abyssal adds health, damage, and periodic
@@ -82,10 +82,12 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.4.4 resolves NPC names through
-`Terraria.Lang.GetNPCNameValue(int)` first, then uses the property
-getter fallback and the known
-parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
+installable package. Version 1.4.5 resolves and caches the vanilla NPC name
+during elite creation, then replaces matching text directly in the final
+`Main.MouseText` draw boundary. It keeps
+`Terraria.Lang.GetNPCNameValue(int)` as the name source and the property
+getter fallback while using only one name hook. It also directly asks TEFKernel
+to hook the known parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
 three rank-specific reward bundles and guaranteed legendary crate distribution
 (70% common, 30% current-environment), and uses the
 primitive-argument `Item.NewItem` overload to create vanilla items safely.
