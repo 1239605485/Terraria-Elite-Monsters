@@ -1,10 +1,14 @@
-# EliteMonsters 1.4.1（Android 稳定核心精英版）
+# EliteMonsters 1.3.0 正式版（liuxin 双层变异规则版）
 
-This version is authored by `liuxin`. The mod keeps the four difficulty profiles,
-progress-scaled elite NPCs, original rewards and legendary AI. It also adds a
-modular biome mutation layer. Each world deterministically receives three global
-rules from its worldID, and each target player's current biome applies a unique
-elite damage, defense, healing or movement modifier.
+This version is authored by `liuxin`. The mod filters friendly, town, and boss
+NPCs, applies the configured world-mode chance, and prevents repeat
+transformation of the same instance. The profile reads both game mode and
+world progress. The four mod profiles are Normal, Expert, Master, and
+Legendary; because Terraria has no native Legendary GameModeID, the custom
+Legendary profile is enabled by Main.zenithWorld in the Zenith/fixed-boi
+special-seed world. Creative/Journey remains on the Normal profile. Progress is
+split into pre-hardmode, early hardmode, pre-Plantera, post-Plantera, and
+endgame. Eligible enemies roll one of three ranks at every progress stage:
 
 - normal elite: `精英·怪物`, white name; from 1.4x/1.15x/+4 defense and
   10x coins in pre-hardmode to 3x/2.1x/+26 defense and 60x coins in endgame;
@@ -29,7 +33,7 @@ progress tier. Legendary elites have a 30% chance to add one random original
 environment crate; before hardmode the common branch is a Golden Crate, after
 hardmode it is a Titanium Crate, and the environment branch follows the target
 player's current biome. No custom item or non-vanilla material is added in this
-version. Version 1.2.2 also hooks the original `Terraria.NPC.AI` without replacing it.
+version. Version 1.3.0 also hooks the original `Terraria.NPC.AI` without replacing it.
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
 lateral repositioning bursts, flyers weave while approaching, worms perform
@@ -51,6 +55,26 @@ cmake -S . -B build \
 cmake --build build --config Release --target EliteMonsters -j2
 ```
 
-The source is split into `elite_core.c`, `elite_ai.c`, `elite_rewards.c` and
-`biome_mutations.c`. The existing GitHub Actions workflow builds and assembles
-the installable ARM64 package.
+The existing GitHub Actions workflow performs the same build and assembles the
+installable package. Version 1.3.0 directly asks TEFKernel to hook the known
+parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
+rare progress reward and guaranteed legendary crate distribution (70% common,
+30% current-environment), and uses the
+primitive-argument `Item.NewItem` overload to create vanilla items safely.
+
+## 双层变异实现
+
+Version 1.3.0 keeps a world-scoped list of 3--5 unique global rules and a
+per-tick terrain resolver driven by the target player's vanilla `Zone*`
+flags. The resolver prioritizes special sub-biomes (temple, spider,
+underworld, meteor, sky, mushroom, ice cave and underground desert) before
+falling back to normal surface/underground biomes. The active terrain is
+automatically enabled on entry and replaced on exit without an input binding.
+
+The AI postfix applies movement, damage, regeneration, player slow, periodic
+reinforcements and rule projectiles. `NPCLoot` handles split/tide/death
+effects, while an optional `NPC.CheckDead` hook implements one-time dungeon
+skeleton resurrection. An optional `Chest.OpenChest`/`Chest.Open` hook
+implements the extra reward rule. `NPC.NewNPC`, `Projectile.NewProjectile`
+and chest APIs are signature-checked at startup; unsupported overloads are
+logged and safely disabled so the Android build remains stable.

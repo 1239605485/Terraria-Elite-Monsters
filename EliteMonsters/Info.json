@@ -1,0 +1,22 @@
+{
+  "pkgId": "eternal.future.elitemonsters",
+  "name": "Elite Monsters（分级精英怪）",
+  "version": "1.3.0",
+  "versionCode": 2026090105,
+  "icon": "icon.png",
+  "author": "liuxin",
+  "brieflyDescribe": "正式版：精英成长、每世界3～5条全局变异，以及自动切换的地形专属规则。作者：liuxin。",
+  "description": "Elite Monsters 现在采用双层变异规则：每个世界首次进入时随机锁定3～5条全局危险规则；玩家进入不同地形时自动启用对应专属规则，离开后立即关闭。规则叠加现有四档难度、进度成长、行为AI和原版奖励。支持敌怪分裂、敌潮、地形弹幕、地下增援、Boss狂暴、地牢骷髅复活和宝箱额外奖励；接口缺失时会安全降级，不影响基础精英系统。",
+  "features": [],
+  "sizeCategory": "TINY",
+  "targetGameVersion": "1.4.5.6.4",
+  "minGameVersion": "1.4.4.0",
+  "maxGameVersion": "1.4.5.6.4",
+  "support": {"android": {"arm64": true, "arm": false, "x64": false, "x86": false}},
+  "dependence": [],
+  "conflicts": [],
+  "stableVerified": true,
+  "experimental": false,
+  "deprecated": false,
+  "hasExtendedContent": true
+}
