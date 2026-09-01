@@ -358,31 +358,6 @@ void elite_core_try_apply(void* instance) {
     if (!elite_core_is_elite(instance)) apply_profile(instance);
 }
 
-void elite_core_probe_life_write(void* instance) {
-    if (!instance || processed_instance(instance)) return;
-    remember_processed_instance(instance);
-
-    int32_t type = 0, life = 0, life_max = 0, damage = 0, defense = 0;
-    bool value = false;
-    if (!elite_core_read_i32(g_ctx.npc_type, instance, &type) || type <= 0 ||
-        !elite_core_read_i32(g_ctx.npc_life, instance, &life) || life <= 0 ||
-        !elite_core_read_i32(g_ctx.npc_life_max, instance, &life_max) || life_max <= 0 ||
-        !elite_core_read_i32(g_ctx.npc_damage, instance, &damage) ||
-        !elite_core_read_i32(g_ctx.npc_defense, instance, &defense)) {
-        return;
-    }
-    if (elite_core_read_bool(g_ctx.npc_friendly, instance, &value) && value) return;
-    if (elite_core_read_bool(g_ctx.npc_town, instance, &value) && value) return;
-    if (elite_core_read_bool(g_ctx.npc_boss, instance, &value) && value) return;
-
-    /* Deliberately obvious one-time increases make the write-path test
-     * observable before the final rank/chance system is enabled. */
-    (void)elite_core_write_i32(g_ctx.npc_life_max, instance, scaled(life_max, 2.0f));
-    (void)elite_core_write_i32(g_ctx.npc_life, instance, scaled(life, 2.0f));
-    (void)elite_core_write_i32(g_ctx.npc_damage, instance, scaled(damage, 2.0f));
-    (void)elite_core_write_i32(g_ctx.npc_defense, instance, scaled(defense, 2.0f));
-}
-
 static void __attribute__((unused)) setdefaults_postfix(
     patch_handle_t instance, void** args, void* result,
     const patch_method_signature_t* sig) {

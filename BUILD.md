@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.7（Android NPC 三属性×2测试版）
+# EliteMonsters 1.4.0（正式精英生成版）
 
 This version is authored by `liuxin`. The mod keeps the four difficulty profiles,
 progress-scaled elite NPCs, original rewards and legendary AI. It also adds a

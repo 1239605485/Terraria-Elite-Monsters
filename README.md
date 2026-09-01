@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.7（Android NPC 三属性×2测试版）
+# EliteMonsters 1.4.0（正式精英生成版）
 
 ## 1.3.0 更新
 
