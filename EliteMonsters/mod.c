@@ -23,8 +23,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     biome_mutations_init();
     elite_ai_init();
     elite_rewards_init();
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
-                     "Loaded modular biome mutation system");
+    ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO, "Loaded modular biome mutation system");
 }
 
 static void cleanup_mod(kernel_mod_handle_t* handle) {
@@ -33,7 +32,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     elite_ai_cleanup();
     biome_mutations_cleanup();
     elite_core_cleanup();
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters", "Unloaded");
+    ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

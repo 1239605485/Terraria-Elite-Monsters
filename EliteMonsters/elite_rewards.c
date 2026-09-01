@@ -80,9 +80,9 @@ static void loot_postfix(patch_handle_t instance, void** args, void* result,
     int item = state->rank == ELITE_RARE ? random_item(progress)
                                          : environment_crate(elite_core_target_player(instance), progress);
     if (spawn_item(instance, item, state->rank == ELITE_RARE ? 2 : 1)) {
-        mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
-                         "精英奖励生成：item=%d rank=%d progress=%s", item,
-                         (int)state->rank, elite_core_progress_name(progress));
+        ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO,
+                          "精英奖励生成：item=%d rank=%d progress=%s", item,
+                          (int)state->rank, elite_core_progress_name(progress));
     }
 }
 
@@ -92,10 +92,18 @@ void elite_rewards_init(void) {
     if (!npc || !item) { if (npc) patchlib_free(npc); if (item) patchlib_free(item); return; }
     patch_handle_t loot = patchlib_type_get_method_by_param_count(npc, "NPCLoot", 0);
     g_new_item = patchlib_type_get_method_by_param_count(item, "NewItem", 9);
-    if (loot) { g_loot_hook = patchlib_install_prepost_hook(loot, NULL, loot_postfix); patchlib_free(loot); }
+    if (loot) {
+        patch_method_signature_t signature = {0};
+        bool supported = patchlib_method_get_signature(loot, &signature) &&
+                         signature.is_instance && signature.return_type == PATCH_VOID &&
+                         tefstd_vector_size(&signature.arg_types) == 0;
+        if (signature.arg_types.data) patchlib_method_signature_free(&signature);
+        if (supported) g_loot_hook = patchlib_install_prepost_hook(loot, NULL, loot_postfix);
+        patchlib_free(loot);
+    }
     patchlib_free(npc); patchlib_free(item);
     if (g_loot_hook != PATCH_HOOK_INVALID_ID)
-        mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters", "NPC.NPCLoot reward Hook installed");
+        ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO, "NPC.NPCLoot reward Hook installed");
 }
 
 void elite_rewards_cleanup(void) {

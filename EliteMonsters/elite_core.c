@@ -24,6 +24,20 @@ static bool valid(patch_handle_t handle) {
     return handle && patchlib_is_valid(handle);
 }
 
+static bool method_is_instance(patch_handle_t method, patch_type_t return_type,
+                               int parameter_count, bool check_parameter_count) {
+    if (!valid(method)) return false;
+    patch_method_signature_t signature = {0};
+    if (!patchlib_method_get_signature(method, &signature)) return false;
+    bool supported = signature.is_instance && signature.return_type == return_type;
+    if (check_parameter_count) {
+        supported = supported &&
+                    (int)tefstd_vector_size(&signature.arg_types) == parameter_count;
+    }
+    patchlib_method_signature_free(&signature);
+    return supported;
+}
+
 bool elite_core_valid_field(patch_handle_t field, patch_type_t type) {
     return valid(field) && patchlib_field_get_type(field) == type;
 }
@@ -406,20 +420,24 @@ static void install_ui_hooks(patch_handle_t npc, patch_handle_t main) {
     const char* names[] = {"get_FullName", "get_TypeName", "get_GivenOrTypeName"};
     for (size_t i = 0; i < 3; ++i) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(npc, names[i], 0);
-        if (method) {
+        if (method && method_is_instance(method, PATCH_OBJECT, 0, true)) {
             patch_hook_id_t hook = patchlib_install_prepost_hook(method, NULL, name_postfix);
             if (hook != PATCH_HOOK_INVALID_ID && g_ctx.name_hook_count < 3)
                 g_ctx.name_hooks[g_ctx.name_hook_count++] = hook;
+            patchlib_free(method);
+        } else if (method) {
             patchlib_free(method);
         }
     }
     const int counts[] = {8, 10};
     for (size_t i = 0; i < 2; ++i) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(main, "MouseText", counts[i]);
-        if (method) {
+        if (method && method_is_instance(method, PATCH_VOID, counts[i], true)) {
             patch_hook_id_t hook = patchlib_install_prepost_hook(method, mouse_prefix, NULL);
             if (hook != PATCH_HOOK_INVALID_ID && g_ctx.mouse_hook_count < 2)
                 g_ctx.mouse_hooks[g_ctx.mouse_hook_count++] = hook;
+            patchlib_free(method);
+        } else if (method) {
             patchlib_free(method);
         }
     }
@@ -434,6 +452,15 @@ void elite_core_init(void) {
     for (int count = 0; count <= 4; ++count) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(npc, "SetDefaults", count);
         if (!method) continue;
+        patch_method_signature_t signature = {0};
+        bool supported = patchlib_method_get_signature(method, &signature) &&
+                         signature.is_instance;
+        if (supported) patchlib_method_signature_free(&signature);
+        if (!supported) {
+            if (signature.arg_types.data) patchlib_method_signature_free(&signature);
+            patchlib_free(method);
+            continue;
+        }
         patch_hook_id_t hook = patchlib_install_prepost_hook(method, NULL, setdefaults_postfix);
         if (hook != PATCH_HOOK_INVALID_ID && g_ctx.setdefaults_hook_count < 8)
             g_ctx.setdefaults_hooks[g_ctx.setdefaults_hook_count++] = hook;

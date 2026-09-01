@@ -5,8 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mod_logger.h"
 #include "tefkernel/patchlib/field.h"
 #include "tefkernel/patchlib/method.h"
+
+#define ELITEMONSTERS_LOG(level, ...) \
+    do { \
+        if (mod_logger_write) mod_logger_write((level), "EliteMonsters", __VA_ARGS__); \
+    } while (0)
 
 typedef enum { ELITE_NORMAL = 1, ELITE_RARE = 3, ELITE_LEGENDARY = 5 } elite_rank_t;
 typedef enum {

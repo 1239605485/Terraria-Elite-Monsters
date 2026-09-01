@@ -31,8 +31,7 @@ static void ai_postfix(patch_handle_t instance, void** args, void* result,
                                    (int32_t)((float)state->base_damage * 1.25f));
         state->enraged = true;
         (void)elite_core_write_bool(ctx->npc_net_update, instance, true);
-        mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
-                         "传奇精英进入狂暴状态");
+        ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO, "传奇精英进入狂暴状态");
     }
     if (state->rank != ELITE_LEGENDARY) return;
 
@@ -71,13 +70,22 @@ void elite_ai_init(void) {
     if (!npc) return;
     patch_handle_t method = patchlib_type_get_method_by_param_count(npc, "AI", 0);
     if (!method) method = patchlib_type_get_method(npc, "AI");
+    bool supported = false;
     if (method) {
-        g_ai_hook = patchlib_install_prepost_hook(method, NULL, ai_postfix);
-        patchlib_free(method);
+        patch_method_signature_t signature = {0};
+        if (patchlib_method_get_signature(method, &signature)) {
+            supported = signature.is_instance && signature.return_type == PATCH_VOID &&
+                        tefstd_vector_size(&signature.arg_types) == 0;
+            patchlib_method_signature_free(&signature);
+        }
     }
+    if (method && supported) {
+        g_ai_hook = patchlib_install_prepost_hook(method, NULL, ai_postfix);
+    }
+    if (method) patchlib_free(method);
     patchlib_free(npc);
     if (g_ai_hook != PATCH_HOOK_INVALID_ID)
-        mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters", "NPC.AI Hook installed");
+        ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO, "NPC.AI Hook installed");
     (void)ctx;
 }
 

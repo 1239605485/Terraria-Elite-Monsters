@@ -65,9 +65,9 @@ static void refresh_rules(void) {
     }
     g_world_id = world_id;
     g_rules_ready = 1;
-    mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters",
-                     "世界变异规则已生成：worldID=%d mask=0x%X", (int)world_id,
-                     (unsigned)g_rule_mask);
+    ELITEMONSTERS_LOG(MOD_LOG_LEVEL_INFO,
+                      "世界变异规则已生成：worldID=%d mask=0x%X", (int)world_id,
+                      (unsigned)g_rule_mask);
 }
 
 static int detect_biome(int player_index) {
@@ -102,10 +102,10 @@ static void apply_biome_stats(void* npc, EliteState* state, int biome) {
     (void)elite_core_write_i32(ctx->npc_damage, npc, damage);
     (void)elite_core_write_i32(ctx->npc_defense, npc, defense);
     state->biome = biome;
-    mod_logger_write(MOD_LOG_LEVEL_DEBUG, "EliteMonsters",
-                     "地形规则启用：%s damage+%d defense+%d", biome_name(biome),
-                     damage_bonus[biome] + ((g_rule_mask & RULE_UNSTABLE) ? 2 : 0),
-                     defense_bonus[biome] + ((g_rule_mask & RULE_REINFORCED) ? 3 : 0));
+    ELITEMONSTERS_LOG(MOD_LOG_LEVEL_DEBUG,
+                      "地形规则启用：%s damage+%d defense+%d", biome_name(biome),
+                      damage_bonus[biome] + ((g_rule_mask & RULE_UNSTABLE) ? 2 : 0),
+                      defense_bonus[biome] + ((g_rule_mask & RULE_REINFORCED) ? 3 : 0));
 }
 
 void biome_mutations_on_spawn(void* npc, size_t slot) {
