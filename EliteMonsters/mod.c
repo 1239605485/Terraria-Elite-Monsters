@@ -261,6 +261,9 @@ static uint32_t g_rule_ticks = 0;
 static uint32_t g_kill_count = 0;
 static terrain_rule_t g_last_reported_terrain = TERRAIN_RULE_NONE;
 static uint32_t g_terrain_report_cooldown = 0;
+static bool g_player_session_seen = false;
+static bool g_player_session_active = false;
+static bool g_world_notice_on_session_enter = false;
 static uint32_t g_tide_cooldown = 0;
 static uint32_t g_spawn_events_this_tick = 0;
 
@@ -454,6 +457,7 @@ static patch_handle_t g_main_net_mode_field = NULL;
 static patch_handle_t g_main_player_field = NULL;
 static patch_handle_t g_main_world_name_field = NULL;
 static patch_handle_t g_main_world_id_field = NULL;
+static patch_handle_t g_main_game_menu_field = NULL;
 static patch_handle_t g_main_day_time_field = NULL;
 static patch_handle_t g_main_snow_storm_field = NULL;
 static patch_handle_t g_main_update_count_field = NULL;
@@ -1092,8 +1096,11 @@ static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
     patch_handle_t player = NULL;
     bool value = false;
     if (!get_player_instance(player_index, &player)) return false;
+    /* A backing field can exist but stay stale on some IL2CPP builds. If it
+     * reads false, still try the property's getter before deciding that the
+     * player is outside the biome. */
     if (valid_field(field, PATCH_BOOL) &&
-        read_bool(field, player, &value)) return value;
+        read_bool(field, player, &value) && value) return true;
 
     patch_handle_t getter = zone_getter_for_field(field);
     if (!getter || !patchlib_is_valid(getter)) return false;
@@ -1170,6 +1177,31 @@ static bool global_rule_active(global_rule_t rule) {
     return global_rule_selected(rule) || g_dynamic_rule == rule;
 }
 
+static void announce_global_rules(void) {
+    char notice[768];
+    int offset = snprintf(notice, sizeof(notice),
+                          "[精英变异] 本世界全局规则（%d条）：",
+                          (int)g_global_rule_count);
+    if (offset < 0) return;
+    if ((size_t)offset >= sizeof(notice)) offset = (int)sizeof(notice) - 1;
+    for (size_t i = 0; i < g_global_rule_count &&
+                        (size_t)offset < sizeof(notice); ++i) {
+        int written = snprintf(notice + offset, sizeof(notice) - (size_t)offset,
+                               "%s%s", i == 0 ? " " : "、",
+                               g_global_rule_names[g_global_rules[i]]);
+        if (written < 0) break;
+        if ((size_t)written >= sizeof(notice) - (size_t)offset) {
+            offset = (int)sizeof(notice) - 1;
+            break;
+        }
+        offset += written;
+    }
+    notice[sizeof(notice) - 1] = '\0';
+    (void)game_text_notice(notice, 255, 220, 80);
+    (void)game_text_notice("[精英变异] 地形规则会随玩家进入或离开区域自动切换。",
+                           180, 220, 255);
+}
+
 static void initialize_world_rules(void) {
     uint32_t identity = current_world_rule_identity();
     if (g_global_rules_initialized && identity == g_world_rule_identity) return;
@@ -1210,28 +1242,7 @@ static void initialize_world_rules(void) {
                   (int)i, g_global_rule_names[g_global_rules[i]]);
     }
 
-    char notice[768];
-    int offset = snprintf(notice, sizeof(notice),
-                          "[精英变异] 本世界已生成 %d 条全局规则：",
-                          (int)g_global_rule_count);
-    if (offset < 0) return;
-    if ((size_t)offset >= sizeof(notice)) offset = (int)sizeof(notice) - 1;
-    for (size_t i = 0; i < g_global_rule_count &&
-                        (size_t)offset < sizeof(notice); ++i) {
-        int written = snprintf(notice + offset, sizeof(notice) - (size_t)offset,
-                               "%s%s", i == 0 ? " " : "、",
-                               g_global_rule_names[g_global_rules[i]]);
-        if (written < 0) break;
-        if ((size_t)written >= sizeof(notice) - (size_t)offset) {
-            offset = (int)sizeof(notice) - 1;
-            break;
-        }
-        offset += written;
-    }
-    notice[sizeof(notice) - 1] = '\0';
-    (void)game_text_notice(notice, 255, 220, 80);
-    (void)game_text_notice("[精英变异] 地形规则会随玩家进入或离开区域自动切换。",
-                           180, 220, 255);
+    announce_global_rules();
 }
 
 static void advance_world_rule_clock(void) {
@@ -2395,6 +2406,7 @@ static void cache_npc_fields(patch_handle_t npc) {
         g_main_player_field = patchlib_type_get_field(main_type, "player");
         g_main_world_name_field = patchlib_type_get_field(main_type, "worldName");
         g_main_world_id_field = patchlib_type_get_field(main_type, "worldID");
+        g_main_game_menu_field = patchlib_type_get_field(main_type, "gameMenu");
         g_main_day_time_field = patchlib_type_get_field(main_type, "dayTime");
         g_main_snow_storm_field = patchlib_type_get_field(main_type, "snowMoon");
         g_main_update_count_field = patchlib_type_get_field(main_type,
@@ -3182,12 +3194,58 @@ static void apply_legendary_movement(patch_handle_t instance, size_t index,
  * reads only; all combat mutation remains restricted to tracked elites. */
 static void update_world_rule_notices(void) {
     int32_t local_player = -1;
-    if (!read_i32(g_main_my_player_field, NULL, &local_player)) return;
+    if (!read_i32(g_main_my_player_field, NULL, &local_player) ||
+        local_player < 0 || local_player > 255) {
+        local_player = 0;
+    }
+
+    bool game_menu = false;
+    if (valid_field(g_main_game_menu_field, PATCH_BOOL) &&
+        read_bool(g_main_game_menu_field, NULL, &game_menu) && game_menu) {
+        if (g_player_session_active) {
+            g_player_session_active = false;
+            g_last_reported_terrain = TERRAIN_RULE_NONE;
+            g_terrain_report_cooldown = 0;
+            g_world_notice_on_session_enter = true;
+        }
+        return;
+    }
+
+    patch_handle_t player_instance = NULL;
+    if (!get_player_instance(local_player, &player_instance)) return;
+    bool active = true;
+    bool dead = false;
+    if (valid_field(g_player_active_field, PATCH_BOOL)) {
+        (void)read_bool(g_player_active_field, player_instance, &active);
+    }
+    if (valid_field(g_player_dead_field, PATCH_BOOL)) {
+        (void)read_bool(g_player_dead_field, player_instance, &dead);
+    }
+    if (!active || dead) {
+        if (g_player_session_active) {
+            g_player_session_active = false;
+            g_last_reported_terrain = TERRAIN_RULE_NONE;
+            g_terrain_report_cooldown = 0;
+            g_world_notice_on_session_enter = true;
+        }
+        return;
+    }
 
     elite_vector2_t player_position = {0.0f, 0.0f};
     if (!read_player_state(local_player, &player_position, NULL, NULL)) return;
 
+    if (!g_player_session_seen || !g_player_session_active) {
+        if (g_player_session_seen) g_world_notice_on_session_enter = true;
+        g_player_session_seen = true;
+        g_player_session_active = true;
+        g_last_reported_terrain = TERRAIN_RULE_NONE;
+        g_terrain_report_cooldown = 0;
+    }
     initialize_world_rules();
+    if (g_world_notice_on_session_enter) {
+        announce_global_rules();
+        g_world_notice_on_session_enter = false;
+    }
     advance_world_rule_clock();
     report_terrain_transition(terrain_rule_for_player(local_player));
 }
@@ -3514,14 +3572,17 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_last_game_update_count = UINT64_MAX;
     g_last_fallback_clock = 0;
     g_last_reported_terrain = TERRAIN_RULE_NONE;
+    g_player_session_seen = false;
+    g_player_session_active = false;
+    g_world_notice_on_session_enter = false;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090108,
+    .version_code = 2026090109,
     .api_version = 1,
-    .version = "1.3.3"
+    .version = "1.3.4"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
