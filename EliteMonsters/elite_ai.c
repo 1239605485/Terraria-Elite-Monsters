@@ -9,7 +9,9 @@ static patch_hook_id_t g_ai_hook = PATCH_HOOK_INVALID_ID;
 static void ai_postfix(patch_handle_t instance, void** args, void* result,
                        const patch_method_signature_t* sig) {
     (void)args; (void)result; (void)sig;
-    if (!instance || !elite_core_is_elite(instance)) return;
+    if (!instance) return;
+    elite_core_try_apply(instance);
+    if (!elite_core_is_elite(instance)) return;
     size_t slot = elite_core_slot(instance);
     EliteState* state = elite_core_state(slot);
     if (!state) return;

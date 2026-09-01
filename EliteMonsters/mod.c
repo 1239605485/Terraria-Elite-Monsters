@@ -10,7 +10,7 @@ void elite_rewards_cleanup(void);
 
 /* Bootstrap profile: keep only the spawn/stat hook while isolating the
  * Android crash. AI and reward hooks can be re-enabled after startup passes. */
-#define ELITEMONSTERS_ENABLE_AI_HOOK 0
+#define ELITEMONSTERS_ENABLE_AI_HOOK 1
 #define ELITEMONSTERS_ENABLE_REWARD_HOOK 0
 
 void (*mod_logger_write)(mod_log_level_t level, const char* tag, const char* fmt, ...) = NULL;

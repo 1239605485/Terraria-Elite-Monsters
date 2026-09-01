@@ -14,6 +14,8 @@ extern void biome_mutations_on_spawn(void* npc, size_t slot);
 
 static EliteContext g_ctx;
 static EliteState g_states[ELITE_TRACK_LIMIT];
+static void* g_processed_instances[ELITE_TRACK_LIMIT];
+static size_t g_processed_count = 0;
 static size_t g_state_count = 0;
 static unsigned long g_elite_count = 0;
 static bool g_initialized = false;
@@ -146,6 +148,22 @@ EliteState* elite_core_state(size_t slot) {
 bool elite_core_is_elite(void* instance) {
     size_t slot = elite_core_slot(instance);
     return slot < g_state_count && g_states[slot].active;
+}
+
+static bool processed_instance(void* instance) {
+    for (size_t i = 0; i < g_processed_count; ++i) {
+        if (g_processed_instances[i] == instance) return true;
+    }
+    return false;
+}
+
+static void remember_processed_instance(void* instance) {
+    if (!instance || processed_instance(instance)) return;
+    if (g_processed_count < ELITE_TRACK_LIMIT) {
+        g_processed_instances[g_processed_count++] = instance;
+        return;
+    }
+    g_processed_instances[g_elite_count % ELITE_TRACK_LIMIT] = instance;
 }
 
 void elite_core_clear(void* instance) {
@@ -323,6 +341,12 @@ static void apply_profile(void* npc) {
     ++g_elite_count;
     LOG(MOD_LOG_LEVEL_INFO, "Elite NPC transformed: type=%d rank=%d progress=%s total=%lu",
         (int)type, (int)rank, elite_core_progress_name(progress), g_elite_count);
+}
+
+void elite_core_try_apply(void* instance) {
+    if (!instance || processed_instance(instance)) return;
+    remember_processed_instance(instance);
+    if (!elite_core_is_elite(instance)) apply_profile(instance);
 }
 
 static void __attribute__((unused)) setdefaults_postfix(
@@ -545,5 +569,7 @@ void elite_core_cleanup(void) {
     free_field(&g_ctx.downed_golem); free_field(&g_ctx.downed_moonlord);
     memset(&g_ctx, 0, sizeof(g_ctx));
     memset(g_states, 0, sizeof(g_states));
+    memset(g_processed_instances, 0, sizeof(g_processed_instances));
     g_state_count = 0; g_elite_count = 0; g_initialized = false;
+    g_processed_count = 0;
 }
