@@ -377,11 +377,6 @@ static patch_handle_t g_player_zone_hallow_field = NULL;
 static patch_handle_t g_player_zone_sky_field = NULL;
 static bool g_progress_fields_logged = false;
 
-/* SetDefaults overloads can call one another. The pre/post depth guard makes
- * sure a reused NPC object is rolled and scaled only once per outer call. */
-static unsigned int g_setdefaults_depth = 0;
-static void *g_setdefaults_root_instance = NULL;
-
 #define LEGENDARY_ENRAGE_LIFE_PERCENT 35
 #define LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER 1.25f
 #define LEGENDARY_TELEPORT_DISTANCE 480.0f
@@ -1299,28 +1294,10 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
     free(name);
 }
 
-static bool setdefaults_prefix(patch_handle_t instance, void **args,
-                               const patch_method_signature_t *sig_info,
-                               void *result) {
-    (void)args;
-    (void)sig_info;
-    (void)result;
-    if (instance) {
-        if (g_setdefaults_depth == 0) g_setdefaults_root_instance = instance;
-        ++g_setdefaults_depth;
-    }
-    return true;
-}
-
 static void setdefaults_postfix(patch_handle_t instance, void **args, void *result,
                                 const patch_method_signature_t *sig_info) {
     (void)args;
     (void)result;
-    if (g_setdefaults_depth > 0) --g_setdefaults_depth;
-    if (g_setdefaults_depth != 0 || instance != g_setdefaults_root_instance) {
-        return;
-    }
-    g_setdefaults_root_instance = NULL;
     ++g_setdefaults_calls;
     if (g_setdefaults_calls == 1) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1462,7 +1439,7 @@ static void discover_spawn_api(void) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "SetDefaults candidate: params=%d", args_count);
         patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-            method, setdefaults_prefix, setdefaults_postfix);
+            method, NULL, setdefaults_postfix);
         if (hook_id != PATCH_HOOK_INVALID_ID) {
             g_setdefaults_hooks[g_setdefaults_hook_count++] = hook_id;
             ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -2207,8 +2184,6 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
     memset(g_elite_affix_masks, 0, sizeof(g_elite_affix_masks));
     memset(g_elite_split_triggered, 0, sizeof(g_elite_split_triggered));
-    g_setdefaults_depth = 0;
-    g_setdefaults_root_instance = NULL;
     g_setdefaults_calls = 0;
     g_elite_count = 0;
     g_rare_reward_count = 0;
@@ -2218,9 +2193,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090105,
+    .version_code = 2026090106,
     .api_version = 1,
-    .version = "1.3.0"
+    .version = "1.3.1"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
