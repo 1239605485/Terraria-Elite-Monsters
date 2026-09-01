@@ -881,17 +881,10 @@ static elite_profile_t make_profile(elite_progress_t progress,
 static int elite_should_spawn(int world_mode) {
     if (world_mode < 0) world_mode = 0;
     if (world_mode >= ELITE_MODE_COUNT) world_mode = ELITE_MODE_COUNT - 1;
-    int chance = g_spawn_chance_percent[world_mode];
-    int32_t local_player = -1;
-    bool day_time = true;
-    (void)read_i32(g_main_my_player_field, NULL, &local_player);
-    (void)read_bool(g_main_day_time_field, NULL, &day_time);
-    if (!day_time && local_player >= 0 &&
-        terrain_rule_for_player(local_player) == TERRAIN_RULE_FOREST) {
-        chance += 10;
-        if (chance > 95) chance = 95;
-    }
-    return random_percent() < chance;
+    /* SetDefaults may run during world bootstrap, before Main.player and the
+     * Zone* fields are valid. Keep this gate side-effect-free; terrain rules
+     * are evaluated later from the safe AI path. */
+    return random_percent() < g_spawn_chance_percent[world_mode];
 }
 
 static int current_world_mode(void) {
@@ -1772,7 +1765,7 @@ static void apply_terrain_rule(patch_handle_t instance, size_t index,
 }
 
 static void handle_rule_death(patch_handle_t instance) {
-    if (!instance || !is_rule_instance(instance)) return;
+    if (!instance || !is_elite_instance(instance)) return;
     size_t index = rule_instance_index(instance);
     if (index >= PROCESSED_INSTANCE_LIMIT || g_rule_death_handled[index]) {
         return;
@@ -1852,16 +1845,17 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (read_bool(g_field_friendly, instance, &value) && value) return;
     if (read_bool(g_field_town_npc, instance, &value) && value) return;
 
-    /* Register every hostile NPC for terrain/global rules. Only the elite
-     * branch below changes rank stats and names; ordinary enemies still feel
-     * the active biome mutation. Bosses are registered too, but are never
-     * converted into elites. */
+    /* Do not register ordinary NPCs here. SetDefaults is also used by world
+     * generation and by several internal templates; keeping the mutation
+     * layer limited to successful elite conversions prevents it from
+     * changing Terraria's vanilla spawn/AI path. */
     (void)read_i32(g_field_damage, instance, &base_damage);
-    remember_rule_instance(instance, npc_type, base_damage, true);
     if (read_bool(g_field_boss, instance, &value) && value) return;
 
     int profile_mode_value = current_world_mode();
     if (!elite_should_spawn(profile_mode_value)) return;
+
+    remember_rule_instance(instance, npc_type, base_damage, true);
 
     elite_progress_t progress = current_progress();
     elite_world_mode_t profile_mode = (elite_world_mode_t)profile_mode_value;
@@ -2020,7 +2014,7 @@ static bool npc_check_dead_prefix(patch_handle_t instance, void **args,
                                   const patch_method_signature_t *sig_info,
                                   void *result) {
     (void)args;
-    if (!instance || !is_rule_instance(instance)) return true;
+    if (!instance || !is_elite_instance(instance)) return true;
     size_t index = rule_instance_index(instance);
     if (index >= PROCESSED_INSTANCE_LIMIT || g_rule_revived[index]) return true;
     if (terrain_rule_for_player(target_player_index(instance)) !=
@@ -2838,7 +2832,7 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     (void)args;
     (void)result;
     (void)sig_info;
-    if (!instance || !is_rule_instance(instance)) return;
+    if (!instance || !is_elite_instance(instance)) return;
 
     initialize_world_rules();
     advance_world_rule_clock();
@@ -2869,8 +2863,6 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
                       (int)g_rule_npc_types[index]);
         }
     }
-
-    if (!is_elite_instance(instance)) return;
 
     elite_rank_t rank = g_elite_ranks[index];
     if (rank != ELITE_LEGENDARY) {
