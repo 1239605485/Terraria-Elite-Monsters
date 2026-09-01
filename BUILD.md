@@ -1,4 +1,4 @@
-# EliteMonsters 1.4.6 正式版（liuxin 四档难度、词缀、名称显示、技能与战利品版）
+# EliteMonsters 1.2.3 正式版（liuxin 四档难度与进度奖励版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -28,14 +28,12 @@ Normal and rare ranks also increase size and knockback resistance. Legendary
 elites are completely immune to knockback. The rank color is
 assigned through the vanilla `Main.MouseText` rarity argument; no `[c/...]`
 markup is written into the NPC name, because the Android build displays that
-markup literally. Normal elites add a small potion bundle and one progression
-material; rare elites add one progression material and one useful vanilla
-equipment item; legendary elites retain the 70% common crate / 30% environment
-crate roll and also add one progression material. Before hardmode the common
-branch is a Golden Crate, after hardmode it is a Titanium Crate, and the
-environment branch follows the target player's current biome. No custom item
-or non-vanilla material is added in this version. Version 1.4.0 also hooks the
-original `Terraria.NPC.AI` without replacing it.
+markup literally. Rare elites add one random original item from the current
+progress tier. Legendary elites have a 30% chance to add one random original
+environment crate; before hardmode the common branch is a Golden Crate, after
+hardmode it is a Titanium Crate, and the environment branch follows the target
+player's current biome. No custom item or non-vanilla material is added in this
+version. Version 1.2.2 also hooks the original `Terraria.NPC.AI` without replacing it.
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
 lateral repositioning bursts, flyers weave while approaching, worms perform
@@ -45,30 +43,6 @@ by 25%. Movement is authoritative on single-player/server; multiplayer
 clients do not duplicate teleports. If a game build does not expose a safe
 `velocity`, `position`, or `Main.player` field, the affected movement is
 skipped while the rest of the mod remains active.
-
-Version 1.4.6 includes six visible affixes. Flame increases damage and periodically
-dashes, Frost adds defense and knockback resistance, Vampiric periodically heals,
-Split triggers one half-health second wind and dash, Enraged adds the low-health
-damage phase to non-legendary ranks, and Abyssal adds health, damage, and periodic
-movement bursts. Profile rolls use `NPC.whoAmI` as a deterministic input for
-better client/server agreement. SetDefaults remains a postfix-only hook so the
-original NPC initialization order is preserved, and
-reward state is committed only after `Item.NewItem` succeeds. NPC name methods
-are resolved from the `FullName`/`TypeName` property getters first and then by
-enumerating the current NPC method table, which covers different IL2CPP name
-getter exports and Android string metadata variants.
-
-Normal elites now perform a low-frequency burst, rare elites perform a faster
-burst, and legendary elites retain their type-aware movement. The name source
-uses only one best-match NPC getter, restoring the elite/affix name while
-avoiding the multi-getter batch that caused the 1.4.0 Android startup crash.
-Direct `NPC.color` write and `Main.NewText` UI invocation remain disabled until
-their exact Android overloads are verified. Loot is split
-by rank: normal elites drop a small potion bundle and a progression material;
-rare elites drop a progression material and a useful vanilla equipment item;
-legendary elites retain the 70% common crate / 30% environment crate roll and
-also drop a progression material. NPC.value supplies the large vanilla coin
-reward for every rank, with the existing rank and difficulty multipliers.
 
 Build the ARM64 package on a machine with CMake and the Android NDK installed:
 
@@ -82,12 +56,8 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.4.6 resolves and passively caches the vanilla NPC name
-during elite creation, then replaces matching text directly in the final
-`Main.MouseText` draw boundary. It keeps
-`Terraria.Lang.GetNPCNameValue(int)` as the name source and the property
-getter fallback while using only one name hook. It also directly asks TEFKernel
-to hook the known parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
-three rank-specific reward bundles and guaranteed legendary crate distribution
-(70% common, 30% current-environment), and uses the
+installable package. Version 1.2.2 directly asks TEFKernel to hook the known
+parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
+rare progress reward and guaranteed legendary crate distribution (70% common,
+30% current-environment), and uses the
 primitive-argument `Item.NewItem` overload to create vanilla items safely.
