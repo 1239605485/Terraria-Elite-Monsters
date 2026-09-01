@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 void (*mod_logger_write)(mod_log_level_t level, const char* tag, const char* fmt, ...) = NULL;
 
@@ -170,6 +171,8 @@ static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
 static int32_t g_elite_base_damage[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_enraged[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_rewarded[PROCESSED_INSTANCE_LIMIT];
+static uint32_t g_elite_affix_masks[PROCESSED_INSTANCE_LIMIT];
+static bool g_elite_split_triggered[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
 
 /* Terraria 1.4.5.6.4 ItemID values from the target game's ItemID table.
@@ -353,6 +356,10 @@ static patch_handle_t g_field_direction = NULL;
 static patch_handle_t g_field_net_update = NULL;
 static patch_handle_t g_field_no_gravity = NULL;
 static patch_handle_t g_field_velocity = NULL;
+static patch_handle_t g_field_who_am_i = NULL;
+static patch_handle_t g_field_immortal = NULL;
+static patch_handle_t g_field_dont_take_damage = NULL;
+static patch_handle_t g_field_catchable = NULL;
 static patch_handle_t g_player_position_field = NULL;
 static patch_handle_t g_player_width_field = NULL;
 static patch_handle_t g_player_height_field = NULL;
@@ -369,6 +376,11 @@ static patch_handle_t g_player_zone_underworld_field = NULL;
 static patch_handle_t g_player_zone_hallow_field = NULL;
 static patch_handle_t g_player_zone_sky_field = NULL;
 static bool g_progress_fields_logged = false;
+
+/* SetDefaults overloads can call one another. The pre/post depth guard makes
+ * sure a reused NPC object is rolled and scaled only once per outer call. */
+static unsigned int g_setdefaults_depth = 0;
+static void *g_setdefaults_root_instance = NULL;
 
 #define LEGENDARY_ENRAGE_LIFE_PERCENT 35
 #define LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER 1.25f
@@ -559,10 +571,13 @@ static void clear_elite_instance(void *instance) {
     g_elite_ai_ticks[slot] = 0;
     g_elite_base_damage[slot] = 0;
     g_elite_enraged[slot] = false;
+    g_elite_affix_masks[slot] = 0;
+    g_elite_split_triggered[slot] = false;
 }
 
 static void set_elite_state(size_t slot, elite_rank_t rank,
-                            elite_behavior_t behavior, int32_t base_damage) {
+                            elite_behavior_t behavior, int32_t base_damage,
+                            uint32_t affix_mask) {
     g_elite_active[slot] = true;
     g_elite_ranks[slot] = rank;
     g_elite_behaviors[slot] = behavior;
@@ -570,26 +585,29 @@ static void set_elite_state(size_t slot, elite_rank_t rank,
     g_elite_base_damage[slot] = base_damage;
     g_elite_enraged[slot] = false;
     g_elite_rewarded[slot] = false;
+    g_elite_affix_masks[slot] = affix_mask;
+    g_elite_split_triggered[slot] = false;
 }
 
 static void remember_elite_instance(void *instance, elite_rank_t rank,
                                     elite_behavior_t behavior,
-                                    int32_t base_damage) {
+                                    int32_t base_damage,
+                                    uint32_t affix_mask) {
     if (!instance) return;
     size_t existing_slot = tracked_instance_index(instance);
     if (existing_slot < PROCESSED_INSTANCE_LIMIT) {
-        set_elite_state(existing_slot, rank, behavior, base_damage);
+        set_elite_state(existing_slot, rank, behavior, base_damage, affix_mask);
         return;
     }
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
         size_t slot = g_elite_instance_count;
         g_elite_instances[slot] = instance;
-        set_elite_state(slot, rank, behavior, base_damage);
+        set_elite_state(slot, rank, behavior, base_damage, affix_mask);
         ++g_elite_instance_count;
     } else {
         size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
         g_elite_instances[slot] = instance;
-        set_elite_state(slot, rank, behavior, base_damage);
+        set_elite_state(slot, rank, behavior, base_damage, affix_mask);
     }
 }
 
@@ -597,6 +615,16 @@ static elite_rank_t elite_rank_for_instance(void *instance) {
     size_t slot = elite_instance_index(instance);
     if (slot < PROCESSED_INSTANCE_LIMIT) return g_elite_ranks[slot];
     return ELITE_NORMAL;
+}
+
+static uint32_t elite_affixes_for_instance(void *instance) {
+    size_t slot = elite_instance_index(instance);
+    if (slot < PROCESSED_INSTANCE_LIMIT) return g_elite_affix_masks[slot];
+    return 0;
+}
+
+static bool elite_has_affix(void *instance, elite_affix_t affix) {
+    return (elite_affixes_for_instance(instance) & (1u << affix)) != 0;
 }
 
 static bool already_rewarded(void *instance) {
@@ -616,6 +644,35 @@ static elite_world_mode_t profile_mode_for_game_mode(int game_mode) {
     return ELITE_MODE_NORMAL;
 }
 
+static uint32_t mix_seed(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7FEB352Du;
+    value ^= value >> 15;
+    value *= 0x846CA68Bu;
+    value ^= value >> 16;
+    return value;
+}
+
+static uint32_t next_seed_value(uint32_t *state) {
+    *state = mix_seed(*state + 0x9E3779B9u);
+    return *state;
+}
+
+/* NPC.whoAmI is synchronized by Terraria and is therefore a better profile
+ * seed than libc rand(), whose call order can differ between client/server. */
+static uint32_t profile_seed(patch_handle_t instance, int32_t npc_type,
+                             elite_progress_t progress,
+                             elite_world_mode_t mode) {
+    int32_t who_am_i = 0;
+    (void)read_i32(g_field_who_am_i, instance, &who_am_i);
+    uint32_t seed = 0x454C4954u;
+    seed ^= (uint32_t)(who_am_i + 1) * 0x45D9F3Bu;
+    seed ^= (uint32_t)(npc_type + 1) * 0x27D4EB2Du;
+    seed ^= (uint32_t)(progress + 1) * 0x165667B1u;
+    seed ^= (uint32_t)(mode + 1) * 0x9E3779B9u;
+    return mix_seed(seed);
+}
+
 static const char *world_mode_name(elite_world_mode_t mode) {
     if (mode < ELITE_MODE_NORMAL || mode >= ELITE_MODE_COUNT) {
         return g_mode_modifiers[ELITE_MODE_NORMAL].name;
@@ -624,7 +681,8 @@ static const char *world_mode_name(elite_world_mode_t mode) {
 }
 
 static elite_profile_t make_profile(elite_progress_t progress,
-                                    elite_world_mode_t mode) {
+                                    elite_world_mode_t mode,
+                                    uint32_t seed) {
     if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
         progress = PROGRESS_PRE_HARDMODE;
     }
@@ -632,7 +690,7 @@ static elite_profile_t make_profile(elite_progress_t progress,
         mode = ELITE_MODE_NORMAL;
     }
 
-    int rank_roll = random_percent();
+    int rank_roll = (int)(next_seed_value(&seed) % 100u);
     size_t rank_index = 0;
     if (rank_roll < 5) {
         rank_index = 2;
@@ -648,24 +706,49 @@ static elite_profile_t make_profile(elite_progress_t progress,
     p.scale_multiplier *= mode_modifier->scale_multiplier;
     p.knockback_multiplier *= mode_modifier->knockback_multiplier;
     p.gold_multiplier *= mode_modifier->gold_multiplier;
-    if (p.rank == ELITE_LEGENDARY) {
-        p.affix_mask = (1u << AFFIX_ABYSSAL) | (1u << AFFIX_ENRAGED) |
-                       (1u << AFFIX_FLAME) | (1u << AFFIX_SPLIT);
-    } else if (p.rank == ELITE_RARE) {
-        p.affix_mask = (1u << (random_percent() % 5)) |
-                       (1u << (random_percent() % 5));
-    } else {
-        p.affix_mask = 1u << (random_percent() % 4);
+    unsigned int affix_count = p.rank == ELITE_LEGENDARY
+                                    ? 3u
+                                    : (p.rank == ELITE_RARE ? 2u : 1u);
+    for (unsigned int i = 0; i < affix_count; ++i) {
+        for (unsigned int attempts = 0; attempts < 8u; ++attempts) {
+            unsigned int candidate = next_seed_value(&seed) % 6u;
+            uint32_t bit = 1u << candidate;
+            if ((p.affix_mask & bit) == 0) {
+                p.affix_mask |= bit;
+                break;
+            }
+        }
+    }
+
+    if (p.affix_mask & (1u << AFFIX_FLAME)) {
+        p.damage_multiplier *= 1.10f;
+    }
+    if (p.affix_mask & (1u << AFFIX_FROST)) {
+        p.defense_bonus += 5;
+        p.knockback_multiplier *= 0.75f;
+    }
+    if (p.affix_mask & (1u << AFFIX_VAMPIRIC)) {
+        p.health_multiplier *= 1.08f;
+    }
+    if (p.affix_mask & (1u << AFFIX_SPLIT)) {
+        p.health_multiplier *= 1.12f;
+    }
+    if (p.affix_mask & (1u << AFFIX_ENRAGED)) {
+        p.damage_multiplier *= 1.05f;
+    }
+    if (p.affix_mask & (1u << AFFIX_ABYSSAL)) {
+        p.health_multiplier *= 1.10f;
+        p.damage_multiplier *= 1.08f;
     }
     return p;
 }
 
 /* 生成 Hook 接入后调用此函数；GameModeID: 0=普通,1=专家,2=大师,
  * 3=旅途。天顶世界由 Main.zenithWorld 覆盖为自定义传奇属性档。 */
-static int elite_should_spawn(int world_mode) {
+static int elite_should_spawn(int world_mode, uint32_t seed) {
     if (world_mode < 0) world_mode = 0;
     if (world_mode >= ELITE_MODE_COUNT) world_mode = ELITE_MODE_COUNT - 1;
-    return random_percent() < g_spawn_chance_percent[world_mode];
+    return (int)(mix_seed(seed) % 100u) < g_spawn_chance_percent[world_mode];
 }
 
 static int current_world_mode(void) {
@@ -992,13 +1075,23 @@ static void apply_elite_profile(patch_handle_t instance) {
     if (read_bool(g_field_friendly, instance, &value) && value) return;
     if (read_bool(g_field_town_npc, instance, &value) && value) return;
     if (read_bool(g_field_boss, instance, &value) && value) return;
+    if (read_bool(g_field_immortal, instance, &value) && value) return;
+    if (read_bool(g_field_dont_take_damage, instance, &value) && value) return;
+    if (read_bool(g_field_catchable, instance, &value) && value) return;
 
     int profile_mode_value = current_world_mode();
-    if (!elite_should_spawn(profile_mode_value)) return;
+    if (!elite_should_spawn(
+            profile_mode_value,
+            profile_seed(instance, npc_type, PROGRESS_PRE_HARDMODE,
+                         (elite_world_mode_t)profile_mode_value))) {
+        return;
+    }
 
     elite_progress_t progress = current_progress();
     elite_world_mode_t profile_mode = (elite_world_mode_t)profile_mode_value;
-    elite_profile_t profile = make_profile(progress, profile_mode);
+    elite_profile_t profile = make_profile(
+        progress, profile_mode, profile_seed(instance, npc_type, progress,
+                                              profile_mode));
     int32_t life = life_max;
     (void)read_i32(g_field_life, instance, &life);
 
@@ -1065,7 +1158,7 @@ static void apply_elite_profile(patch_handle_t instance) {
     /* Keep the instance marked even if a field is unavailable in this game
      * build. The name and drawing hooks still need to identify the NPC. */
     remember_elite_instance(instance, profile.rank, detect_behavior(instance),
-                            elite_damage);
+                            elite_damage, profile.affix_mask);
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1093,8 +1186,12 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
     elite_rank_t rank = elite_rank_for_instance(instance);
     if (rank != ELITE_RARE && rank != ELITE_LEGENDARY) return;
 
-    remember_rewarded(instance);
-    if (!reward_drop_allowed()) return;
+    if (!reward_drop_allowed()) {
+        /* Clients never create the item, but still remember the completed
+         * loot callback so a repeated client-side call stays harmless. */
+        remember_rewarded(instance);
+        return;
+    }
 
     elite_progress_t progress = current_progress();
     if (rank == ELITE_RARE) {
@@ -1102,6 +1199,7 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
         int32_t item_stack = 0;
         if (select_rare_progress_reward(progress, &item_type, &item_stack) &&
             spawn_vanilla_reward(instance, item_type, item_stack)) {
+            remember_rewarded(instance);
             ++g_rare_reward_count;
             ELITE_LOG(
                 MOD_LOG_LEVEL_INFO,
@@ -1127,6 +1225,7 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
         crate_kind = "environment";
     }
     if (spawn_vanilla_reward(instance, item_type, 1)) {
+        remember_rewarded(instance);
         ++g_legendary_reward_count;
         ELITE_LOG(
             MOD_LOG_LEVEL_INFO,
@@ -1139,6 +1238,21 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
                   "Legendary crate could not be spawned: kind=%s item=%d progress=%s",
                   crate_kind, (int)item_type, progress_name(progress));
     }
+}
+
+static size_t append_affix_labels(char *buffer, size_t capacity,
+                                  size_t offset, uint32_t affix_mask) {
+    static const char *labels[6] = {
+        "烈焰", "寒霜", "吸血", "分裂", "狂暴", "深渊"
+    };
+    for (size_t i = 0; i < 6; ++i) {
+        if ((affix_mask & (1u << i)) == 0 || offset >= capacity) continue;
+        int written = snprintf(buffer + offset, capacity - offset, "%s·",
+                               labels[i]);
+        if (written < 0) return offset;
+        offset += (size_t)written;
+    }
+    return offset;
 }
 
 /* Add a visible marker at the NPC name source. The MouseText hook below also
@@ -1171,7 +1285,13 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
     elite_rank_t rank = elite_rank_for_instance(instance);
     if (rank == ELITE_RARE) prefix = "稀有·";
     if (rank == ELITE_LEGENDARY) prefix = "传奇·";
-    (void)snprintf(decorated, sizeof(decorated), "%s%s", prefix, name);
+    size_t offset = (size_t)snprintf(decorated, sizeof(decorated), "%s", prefix);
+    offset = append_affix_labels(decorated, sizeof(decorated), offset,
+                                 elite_affixes_for_instance(instance));
+    if (offset < sizeof(decorated)) {
+        (void)snprintf(decorated + offset, sizeof(decorated) - offset, "%s",
+                       name);
+    }
     patch_handle_t replacement = patchlib_string_create(decorated);
     if (replacement && patchlib_is_valid(replacement)) {
         *(patch_handle_t *)result = replacement;
@@ -1179,11 +1299,28 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
     free(name);
 }
 
+static bool setdefaults_prefix(patch_handle_t instance, void **args,
+                               const patch_method_signature_t *sig_info,
+                               void *result) {
+    (void)args;
+    (void)sig_info;
+    (void)result;
+    if (instance) {
+        if (g_setdefaults_depth == 0) g_setdefaults_root_instance = instance;
+        ++g_setdefaults_depth;
+    }
+    return true;
+}
+
 static void setdefaults_postfix(patch_handle_t instance, void **args, void *result,
                                 const patch_method_signature_t *sig_info) {
-    (void)instance;
     (void)args;
     (void)result;
+    if (g_setdefaults_depth > 0) --g_setdefaults_depth;
+    if (g_setdefaults_depth != 0 || instance != g_setdefaults_root_instance) {
+        return;
+    }
+    g_setdefaults_root_instance = NULL;
     ++g_setdefaults_calls;
     if (g_setdefaults_calls == 1) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1214,6 +1351,10 @@ static void cache_npc_fields(patch_handle_t npc) {
     g_field_net_update = patchlib_type_get_field(npc, "netUpdate");
     g_field_no_gravity = patchlib_type_get_field(npc, "noGravity");
     g_field_velocity = patchlib_type_get_field(npc, "velocity");
+    g_field_who_am_i = patchlib_type_get_field(npc, "whoAmI");
+    g_field_immortal = patchlib_type_get_field(npc, "immortal");
+    g_field_dont_take_damage = patchlib_type_get_field(npc, "dontTakeDamage");
+    g_field_catchable = patchlib_type_get_field(npc, "catchable");
 
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
@@ -1321,7 +1462,7 @@ static void discover_spawn_api(void) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "SetDefaults candidate: params=%d", args_count);
         patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-            method, NULL, setdefaults_postfix);
+            method, setdefaults_prefix, setdefaults_postfix);
         if (hook_id != PATCH_HOOK_INVALID_ID) {
             g_setdefaults_hooks[g_setdefaults_hook_count++] = hook_id;
             ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1439,13 +1580,13 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
     (void)result;
     if (!args || !sig_info ||
         tefstd_vector_size(&sig_info->arg_types) < 3 || !args[0]) {
-        return false;
+        return true;
     }
 
     patch_handle_t text_handle = *(patch_handle_t *)args[0];
-    if (!text_handle || !patchlib_is_valid(text_handle)) return false;
+    if (!text_handle || !patchlib_is_valid(text_handle)) return true;
     char *text = patchlib_string_cstr(text_handle);
-    if (!text) return false;
+    if (!text) return true;
 
     int rarity = -1;
     if (strstr(text, "传奇·") != NULL) {
@@ -1456,14 +1597,14 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
         rarity = 0;
     }
     free(text);
-    if (rarity < 0) return false;
+    if (rarity < 0) return true;
 
     const size_t arg_count = tefstd_vector_size(&sig_info->arg_types);
     /* MouseText(string, int, byte, ...) and
      * MouseText(string, string, int, byte, ...). */
     const size_t rare_index = (arg_count >= 10) ? 2 : 1;
     if (args[rare_index]) *(int *)args[rare_index] = rarity;
-    return false;
+    return true;
 }
 
 static void discover_mouse_text_api(patch_handle_t main_type) {
@@ -1534,6 +1675,11 @@ static uint32_t legendary_action_interval(elite_behavior_t behavior,
 static void update_legendary_enrage(patch_handle_t instance, size_t index) {
     if (g_elite_enraged[index]) return;
 
+    elite_rank_t rank = g_elite_ranks[index];
+    bool has_enrage = rank == ELITE_LEGENDARY ||
+                      elite_has_affix(instance, AFFIX_ENRAGED);
+    if (!has_enrage) return;
+
     int32_t life = 0;
     int32_t life_max = 0;
     if (!read_i32(g_field_life, instance, &life) ||
@@ -1542,8 +1688,10 @@ static void update_legendary_enrage(patch_handle_t instance, size_t index) {
         return;
     }
 
-    if ((int64_t)life * 100 >
-        (int64_t)life_max * LEGENDARY_ENRAGE_LIFE_PERCENT) {
+    int enrage_percent = rank == ELITE_LEGENDARY
+                             ? LEGENDARY_ENRAGE_LIFE_PERCENT
+                             : 30;
+    if ((int64_t)life * 100 > (int64_t)life_max * enrage_percent) {
         return;
     }
 
@@ -1556,7 +1704,8 @@ static void update_legendary_enrage(patch_handle_t instance, size_t index) {
     g_elite_enraged[index] = true;
     request_npc_net_update(instance);
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
-              "Legendary elite entered enrage: damage=%.2fx life=%d/%d",
+              "%s elite entered enrage: damage=%.2fx life=%d/%d",
+              rank == ELITE_LEGENDARY ? "Legendary" : "Affix", 
               (double)LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER, (int)life,
               (int)life_max);
 }
@@ -1636,6 +1785,54 @@ static void apply_rank_dash(patch_handle_t instance, elite_rank_t rank) {
     (void)read_bool(g_field_no_gravity, instance, &no_gravity);
     if (!no_gravity && velocity.y > -6.0f) velocity.y = -6.0f;
     (void)write_vector2_field(g_field_velocity, instance, &velocity);
+}
+
+/* Safe, field-only affix effects. These do not replace vanilla attack logic,
+ * and they continue to work on builds that do not expose projectile APIs. */
+static void apply_affix_effects(patch_handle_t instance, size_t index) {
+    uint32_t affix_mask = g_elite_affix_masks[index];
+    uint32_t ticks = g_elite_ai_ticks[index];
+    int32_t life = 0;
+    int32_t life_max = 0;
+    if (!read_i32(g_field_life, instance, &life) ||
+        !read_i32(g_field_life_max, instance, &life_max) || life <= 0 ||
+        life_max <= 0) {
+        return;
+    }
+
+    if ((affix_mask & (1u << AFFIX_VAMPIRIC)) != 0 && ticks % 90u == 0u) {
+        int32_t healed = life + (life_max / 100);
+        if (healed <= life) healed = life + 1;
+        if (healed > life_max) healed = life_max;
+        if (healed != life) {
+            (void)write_i32(g_field_life, instance, healed);
+            request_npc_net_update(instance);
+        }
+    }
+
+    /* Split is a one-time second wind: it restores 10% max life and forces a
+     * short dash at half health. This keeps the mechanic reliable without
+     * depending on an unstable NPC.NewNPC overload. */
+    if ((affix_mask & (1u << AFFIX_SPLIT)) != 0 &&
+        !g_elite_split_triggered[index] &&
+        (int64_t)life * 100 <= (int64_t)life_max * 50) {
+        int32_t restored = life + life_max / 10;
+        if (restored > life_max) restored = life_max;
+        (void)write_i32(g_field_life, instance, restored);
+        g_elite_split_triggered[index] = true;
+        apply_rank_dash(instance, g_elite_ranks[index]);
+        request_npc_net_update(instance);
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Split affix triggered: life=%d/%d", (int)restored,
+                  (int)life_max);
+    }
+
+    if ((affix_mask & (1u << AFFIX_FLAME)) != 0 && ticks % 120u == 0u) {
+        apply_rank_dash(instance, g_elite_ranks[index]);
+    }
+    if ((affix_mask & (1u << AFFIX_ABYSSAL)) != 0 && ticks % 240u == 0u) {
+        apply_rank_dash(instance, g_elite_ranks[index]);
+    }
 }
 
 static void apply_legendary_movement(patch_handle_t instance, size_t index,
@@ -1767,6 +1964,7 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     if (player >= 0) (void)write_i32(g_field_target, instance, player);
 
     elite_rank_t rank = g_elite_ranks[index];
+    apply_affix_effects(instance, index);
     if (rank != ELITE_LEGENDARY) {
         if (rank == ELITE_RARE &&
             g_elite_ai_ticks[index] % 150u == 0u) {
@@ -1947,7 +2145,7 @@ static void discover_ai_api(patch_handle_t npc) {
 
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
-    srand(0x454C4954u);
+    srand((unsigned int)time(NULL) ^ 0x454C4954u);
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
               "Loaded Android Hook probe; resolving NPC spawn API");
     discover_spawn_api();
@@ -1999,10 +2197,18 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
     g_item_new_item_method = NULL;
+    g_field_who_am_i = NULL;
+    g_field_immortal = NULL;
+    g_field_dont_take_damage = NULL;
+    g_field_catchable = NULL;
     g_elite_instance_count = 0;
     memset(g_elite_instances, 0, sizeof(g_elite_instances));
     memset(g_elite_active, 0, sizeof(g_elite_active));
     memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
+    memset(g_elite_affix_masks, 0, sizeof(g_elite_affix_masks));
+    memset(g_elite_split_triggered, 0, sizeof(g_elite_split_triggered));
+    g_setdefaults_depth = 0;
+    g_setdefaults_root_instance = NULL;
     g_setdefaults_calls = 0;
     g_elite_count = 0;
     g_rare_reward_count = 0;
@@ -2012,9 +2218,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090104,
+    .version_code = 2026090105,
     .api_version = 1,
-    .version = "1.2.4"
+    .version = "1.3.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

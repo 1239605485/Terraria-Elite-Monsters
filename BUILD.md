@@ -1,4 +1,4 @@
-# EliteMonsters 1.2.3 正式版（liuxin 四档难度与进度奖励版）
+# EliteMonsters 1.3.0 正式版（liuxin 四档难度、词缀与进度奖励版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -44,6 +44,14 @@ clients do not duplicate teleports. If a game build does not expose a safe
 `velocity`, `position`, or `Main.player` field, the affected movement is
 skipped while the rest of the mod remains active.
 
+Version 1.3.0 adds six visible affixes. Flame increases damage and periodically
+dashes, Frost adds defense and knockback resistance, Vampiric periodically heals,
+Split triggers one half-health second wind and dash, Enraged adds the low-health
+damage phase to non-legendary ranks, and Abyssal adds health, damage, and periodic
+movement bursts. Profile rolls use `NPC.whoAmI` as a deterministic input for
+better client/server agreement. SetDefaults hooks use a pre/post depth guard, and
+reward state is committed only after `Item.NewItem` succeeds.
+
 Build the ARM64 package on a machine with CMake and the Android NDK installed:
 
 ```sh
@@ -56,7 +64,7 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.2.2 directly asks TEFKernel to hook the known
+installable package. Version 1.3.0 directly asks TEFKernel to hook the known
 parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
 rare progress reward and guaranteed legendary crate distribution (70% common,
 30% current-environment), and uses the
