@@ -135,14 +135,15 @@ static const elite_mode_modifier_t g_mode_modifiers[ELITE_MODE_COUNT] = {
 
 /* 正式配置：按普通、专家、大师、传奇顺序排列，每档递增 10%。 */
 static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
-    100, 100, 100, 100
+    20, 30, 40, 50
 };
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
 static size_t g_setdefaults_hook_count = 0;
-#define NPC_NAME_HOOK_LIMIT 3
+#define NPC_NAME_HOOK_LIMIT 8
 static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
 static size_t g_npc_name_hook_count = 0;
+static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
 static size_t g_mouse_text_hook_count = 0;
@@ -1517,34 +1518,122 @@ static void discover_reward_api(patch_handle_t npc, patch_handle_t item_type) {
     if (!item_supported) g_item_new_item_method = NULL;
 }
 
-static void discover_name_api(patch_handle_t npc) {
-    const char *name_getters[NPC_NAME_HOOK_LIMIT] = {
-        "get_FullName", "get_TypeName", "get_GivenOrTypeName"
-    };
+static bool name_method_already_hooked(patch_handle_t method) {
+    int token = patchlib_method_get_token(method);
+    if (token < 0) return false;
+    for (size_t i = 0; i < g_npc_name_hook_count; ++i) {
+        if (g_npc_name_tokens[i] == token) return true;
+    }
+    return false;
+}
 
-    for (size_t i = 0; i < NPC_NAME_HOOK_LIMIT; ++i) {
+static bool install_name_hook(patch_handle_t method, const char *name) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_npc_name_hook_count >= NPC_NAME_HOOK_LIMIT ||
+        name_method_already_hooked(method)) {
+        return false;
+    }
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return false;
+    /* System.String is reported as PATCH_OBJECT by some TEFKernel builds and
+     * as PATCH_POINTER by older Android metadata adapters. Both values are
+     * object handles at the callback boundary and can be passed to the string
+     * helper. */
+    bool supported = sig.is_instance &&
+                     (sig.return_type == PATCH_OBJECT ||
+                      sig.return_type == PATCH_POINTER) &&
+                     tefstd_vector_size(&sig.arg_types) == 0;
+    if (!supported) {
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "NPC name candidate skipped: name=%s instance=%d return=%d params=%d",
+                  name ? name : "?", sig.is_instance ? 1 : 0,
+                  (int)sig.return_type,
+                  (int)tefstd_vector_size(&sig.arg_types));
+    }
+    patchlib_method_signature_free(&sig);
+    if (!supported) return false;
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, npc_name_postfix);
+    if (hook_id == PATCH_HOOK_INVALID_ID) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC name getter hook failed: name=%s", name ? name : "?");
+        return false;
+    }
+
+    size_t slot = g_npc_name_hook_count++;
+    g_npc_name_hooks[slot] = hook_id;
+    g_npc_name_tokens[slot] = patchlib_method_get_token(method);
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "NPC name getter hook installed: %s id=%d",
+              name ? name : "?", (int)hook_id);
+    return true;
+}
+
+static void discover_name_api(patch_handle_t npc) {
+    /* Resolve the managed properties first. On some Android IL2CPP builds the
+     * generated get_* method is not returned by method-name lookup even though
+     * the property metadata still exposes its getter. */
+    const char *name_properties[] = {
+        "FullName", "GivenOrTypeName", "TypeName", "DisplayName",
+        "HoverName", "Name"
+    };
+    const size_t property_count =
+        sizeof(name_properties) / sizeof(name_properties[0]);
+    for (size_t i = 0; i < property_count &&
+                       g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT; ++i) {
+        patch_handle_t property = patchlib_type_get_property(
+            npc, name_properties[i]);
+        if (!property || !patchlib_is_valid(property)) continue;
+        patch_handle_t getter = patchlib_property_get_get_method(property);
+        if (!getter || !patchlib_is_valid(getter)) continue;
+        (void)install_name_hook(getter, name_properties[i]);
+    }
+
+    /* Keep known method names as a fast path, then enumerate the method table
+     * because IL2CPP exports can rename properties or expose them only as
+     * Get* methods. */
+    const char *name_getters[] = {
+        "get_FullName", "get_TypeName", "get_GivenOrTypeName",
+        "get_DisplayName", "get_HoverName", "get_Name",
+        "GetFullName", "GetTypeName", "GetGivenName", "GetDisplayName",
+        "GetName"
+    };
+    const size_t known_count = sizeof(name_getters) / sizeof(name_getters[0]);
+    for (size_t i = 0; i < known_count; ++i) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(
             npc, name_getters[i], 0);
-        if (!method || !patchlib_is_valid(method)) continue;
-
-        patch_method_signature_t sig = {0};
-        if (!patchlib_method_get_signature(method, &sig)) continue;
-        if (!sig.is_instance || sig.return_type != PATCH_OBJECT) {
-            patchlib_method_signature_free(&sig);
-            continue;
-        }
-
-        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-            method, NULL, npc_name_postfix);
-        if (hook_id != PATCH_HOOK_INVALID_ID &&
-            g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT) {
-            g_npc_name_hooks[g_npc_name_hook_count++] = hook_id;
-            ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                      "NPC name getter hook installed: %s id=%d",
-                      name_getters[i], (int)hook_id);
-        }
-        patchlib_method_signature_free(&sig);
+        (void)install_name_hook(method, name_getters[i]);
     }
+
+    tefstd_vector_t methods = {0};
+    if (!tefstd_vector_init(&methods, sizeof(patch_handle_t))) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC name method vector initialization failed");
+        return;
+    }
+    if (patchlib_type_get_methods(npc, true, &methods)) {
+        size_t method_count = tefstd_vector_size(&methods);
+        for (size_t i = 0; i < method_count &&
+                           g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT; ++i) {
+            patch_handle_t *entry = (patch_handle_t *)tefstd_vector_at(&methods, i);
+            patch_handle_t method = entry ? *entry : NULL;
+            if (!method || !patchlib_is_valid(method)) continue;
+            const char *name = patchlib_method_get_name(method);
+            if (!name || (!strstr(name, "Name") && !strstr(name, "name"))) {
+                continue;
+            }
+            (void)install_name_hook(method, name);
+        }
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "NPC name method discovery complete: methods=%d hooks=%d",
+                  (int)method_count, (int)g_npc_name_hook_count);
+    } else {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC name method enumeration failed");
+    }
+    tefstd_vector_destroy(&methods);
 }
 
 /* Main.MouseText receives the final hover string and an integer rarity.
@@ -2158,6 +2247,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_npc_name_hooks[i]);
     }
     g_npc_name_hook_count = 0;
+    memset(g_npc_name_tokens, 0, sizeof(g_npc_name_tokens));
     for (size_t i = 0; i < g_mouse_text_hook_count; ++i) {
         patchlib_uninstall_hook(g_mouse_text_hooks[i]);
     }
@@ -2193,9 +2283,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090106,
+    .version_code = 2026090107,
     .api_version = 1,
-    .version = "1.3.1"
+    .version = "1.3.2"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
