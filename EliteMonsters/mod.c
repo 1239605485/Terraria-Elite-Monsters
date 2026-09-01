@@ -170,6 +170,7 @@ static unsigned long g_elite_count = 0;
 #define PROCESSED_INSTANCE_LIMIT 1024
 static void *g_elite_instances[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_active[PROCESSED_INSTANCE_LIMIT];
+static int32_t g_elite_types[PROCESSED_INSTANCE_LIMIT];
 static elite_rank_t g_elite_ranks[PROCESSED_INSTANCE_LIMIT];
 static elite_behavior_t g_elite_behaviors[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
@@ -642,6 +643,7 @@ static void clear_elite_instance(void *instance) {
     size_t slot = tracked_instance_index(instance);
     if (slot >= PROCESSED_INSTANCE_LIMIT) return;
     g_elite_active[slot] = false;
+    g_elite_types[slot] = 0;
     g_elite_rewarded[slot] = false;
     g_elite_reward_mask[slot] = 0;
     g_elite_spawn_announced[slot] = false;
@@ -654,8 +656,9 @@ static void clear_elite_instance(void *instance) {
 
 static void set_elite_state(size_t slot, elite_rank_t rank,
                             elite_behavior_t behavior, int32_t base_damage,
-                            uint32_t affix_mask) {
+                            uint32_t affix_mask, int32_t npc_type) {
     g_elite_active[slot] = true;
+    g_elite_types[slot] = npc_type;
     g_elite_ranks[slot] = rank;
     g_elite_behaviors[slot] = behavior;
     g_elite_ai_ticks[slot] = 0;
@@ -671,22 +674,25 @@ static void set_elite_state(size_t slot, elite_rank_t rank,
 static void remember_elite_instance(void *instance, elite_rank_t rank,
                                     elite_behavior_t behavior,
                                     int32_t base_damage,
-                                    uint32_t affix_mask) {
+                                    uint32_t affix_mask, int32_t npc_type) {
     if (!instance) return;
     size_t existing_slot = tracked_instance_index(instance);
     if (existing_slot < PROCESSED_INSTANCE_LIMIT) {
-        set_elite_state(existing_slot, rank, behavior, base_damage, affix_mask);
+        set_elite_state(existing_slot, rank, behavior, base_damage, affix_mask,
+                        npc_type);
         return;
     }
     if (g_elite_instance_count < PROCESSED_INSTANCE_LIMIT) {
         size_t slot = g_elite_instance_count;
         g_elite_instances[slot] = instance;
-        set_elite_state(slot, rank, behavior, base_damage, affix_mask);
+        set_elite_state(slot, rank, behavior, base_damage, affix_mask,
+                        npc_type);
         ++g_elite_instance_count;
     } else {
         size_t slot = g_elite_count % PROCESSED_INSTANCE_LIMIT;
         g_elite_instances[slot] = instance;
-        set_elite_state(slot, rank, behavior, base_damage, affix_mask);
+        set_elite_state(slot, rank, behavior, base_damage, affix_mask,
+                        npc_type);
     }
 }
 
@@ -1295,7 +1301,7 @@ static void apply_elite_profile(patch_handle_t instance) {
     /* Keep the instance marked even if a field is unavailable in this game
      * build. The name and drawing hooks still need to identify the NPC. */
     remember_elite_instance(instance, profile.rank, detect_behavior(instance),
-                            elite_damage, profile.affix_mask);
+                            elite_damage, profile.affix_mask, npc_type);
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1451,6 +1457,34 @@ static size_t append_affix_labels(char *buffer, size_t capacity,
     return offset;
 }
 
+static void stage_pending_name(const char *source, const char *decorated) {
+    if (!source || !decorated) return;
+    (void)snprintf(g_pending_source_name, sizeof(g_pending_source_name),
+                   "%s", source);
+    (void)snprintf(g_pending_decorated_name, sizeof(g_pending_decorated_name),
+                   "%s", decorated);
+    g_pending_name_valid = true;
+}
+
+static bool elite_profile_for_type(int32_t npc_type, elite_rank_t *rank,
+                                   uint32_t *affix_mask) {
+    bool found = false;
+    elite_rank_t best_rank = ELITE_NORMAL;
+    uint32_t best_affixes = 0;
+    for (size_t i = 0; i < g_elite_instance_count; ++i) {
+        if (!g_elite_active[i] || g_elite_types[i] != npc_type) continue;
+        if (!found || g_elite_ranks[i] > best_rank) {
+            best_rank = g_elite_ranks[i];
+            best_affixes = g_elite_affix_masks[i];
+            found = true;
+        }
+    }
+    if (!found) return false;
+    if (rank) *rank = best_rank;
+    if (affix_mask) *affix_mask = best_affixes;
+    return true;
+}
+
 /* Add a visible marker at the NPC name source. The MouseText hook below also
  * applies a rank-specific vanilla rarity directly, so this works even when the Android build
  * does not parse [c/...] tags in the NPC hover renderer. */
@@ -1496,12 +1530,61 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
      * returns, even though the callback itself ran successfully. MouseText
      * is the final UI boundary, so it can still receive the decorated name
      * without installing a second NPC name hook. */
-    (void)snprintf(g_pending_source_name, sizeof(g_pending_source_name),
-                   "%s", name);
-    (void)snprintf(g_pending_decorated_name, sizeof(g_pending_decorated_name),
-                   "%s", decorated);
-    g_pending_name_valid = true;
+    stage_pending_name(name, decorated);
 
+    patch_handle_t replacement = patchlib_string_create(decorated);
+    if (replacement && patchlib_is_valid(replacement)) {
+        *(patch_handle_t *)result = replacement;
+    }
+    free(name);
+}
+
+/* Main NPC hover text is normally built through Lang.GetNPCNameValue(int),
+ * not through NPC.FullName. This callback has no NPC instance, so it uses the
+ * active elite type table populated by SetDefaults and selects the highest
+ * active rank for that type. It is intentionally the only name hook used by
+ * the discovery routine when this API is present. */
+static void npc_language_name_postfix(patch_handle_t instance, void **args,
+                                      void *result,
+                                      const patch_method_signature_t *sig_info) {
+    (void)instance;
+    (void)sig_info;
+    if (!args || !args[0] || !result) return;
+
+    int32_t npc_type = *(int32_t *)args[0];
+    elite_rank_t rank = ELITE_NORMAL;
+    uint32_t affix_mask = 0;
+    if (!elite_profile_for_type(npc_type, &rank, &affix_mask)) return;
+
+    patch_handle_t original = *(patch_handle_t *)result;
+    if (!original || !patchlib_is_valid(original)) return;
+    char *name = patchlib_string_cstr(original);
+    if (!name || !name[0]) {
+        free(name);
+        return;
+    }
+    if (strstr(name, "精英·") != NULL ||
+        strstr(name, "稀有·") != NULL ||
+        strstr(name, "传奇·") != NULL) {
+        free(name);
+        return;
+    }
+
+    const char *prefix = "精英·";
+    if (rank == ELITE_RARE) prefix = "稀有·";
+    if (rank == ELITE_LEGENDARY) prefix = "传奇·";
+    char decorated[512];
+    size_t offset = (size_t)snprintf(decorated, sizeof(decorated), "%s",
+                                     prefix);
+    offset = append_affix_labels(decorated, sizeof(decorated), offset,
+                                 affix_mask);
+    if (offset < sizeof(decorated)) {
+        (void)snprintf(decorated + offset, sizeof(decorated) - offset, "%s",
+                       name);
+    }
+
+    ++g_npc_name_calls;
+    stage_pending_name(name, decorated);
     patch_handle_t replacement = patchlib_string_create(decorated);
     if (replacement && patchlib_is_valid(replacement)) {
         *(patch_handle_t *)result = replacement;
@@ -1805,10 +1888,43 @@ static bool install_name_property_hook(patch_handle_t npc,
     return install_name_hook(getter, property_name);
 }
 
+static bool install_language_name_hook(void) {
+    if (g_npc_name_hook_count >= NPC_NAME_HOOK_LIMIT) return false;
+
+    patch_handle_t lang = patchlib_type_get_type("Terraria", "Lang");
+    if (!lang || !patchlib_is_valid(lang)) return false;
+    patch_handle_t method = patchlib_type_get_method_by_param_count(
+        lang, "GetNPCNameValue", 1);
+    if (!method || !patchlib_is_valid(method)) return false;
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return false;
+    bool supported = !sig.is_instance &&
+                     (sig.return_type == PATCH_OBJECT ||
+                      sig.return_type == PATCH_POINTER) &&
+                     tefstd_vector_size(&sig.arg_types) == 1;
+    patchlib_method_signature_free(&sig);
+    if (!supported) return false;
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, npc_language_name_postfix);
+    if (hook_id == PATCH_HOOK_INVALID_ID) return false;
+
+    g_npc_name_hooks[0] = hook_id;
+    g_npc_name_tokens[0] = patchlib_method_get_token(method);
+    g_npc_name_hook_count = 1;
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "NPC language name hook installed: GetNPCNameValue id=%d",
+              (int)hook_id);
+    return true;
+}
+
 static void discover_name_api(patch_handle_t npc) {
     /* Install exactly one name source hook. The previous build installed every
      * Name-like method returned by metadata enumeration; that worked on some
      * desktop layouts but caused SIGILL during the first Android UI frame. */
+    if (install_language_name_hook()) return;
+
     const char *name_properties[] = {
         "FullName", "GivenOrTypeName", "TypeName", "DisplayName",
         "HoverName", "Name"
@@ -2593,6 +2709,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_elite_instance_count = 0;
     memset(g_elite_instances, 0, sizeof(g_elite_instances));
     memset(g_elite_active, 0, sizeof(g_elite_active));
+    memset(g_elite_types, 0, sizeof(g_elite_types));
     memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
     memset(g_elite_reward_mask, 0, sizeof(g_elite_reward_mask));
     memset(g_elite_spawn_announced, 0, sizeof(g_elite_spawn_announced));
@@ -2609,9 +2726,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090111,
+    .version_code = 2026090112,
     .api_version = 1,
-    .version = "1.4.3"
+    .version = "1.4.4"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
