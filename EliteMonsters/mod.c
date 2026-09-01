@@ -251,6 +251,7 @@ static unsigned long g_legendary_reward_count = 0;
 static bool g_global_rules_initialized = false;
 static uint32_t g_world_rule_identity = 0;
 static uint32_t g_world_rule_rng = 0;
+static uint32_t g_fallback_world_identity = 0;
 static global_rule_t g_global_rules[GLOBAL_RULE_SLOT_LIMIT];
 static size_t g_global_rule_count = 0;
 static global_rule_t g_dynamic_rule = GLOBAL_RULE_COUNT;
@@ -1062,8 +1063,12 @@ static uint32_t current_world_rule_identity(void) {
     /* A zero identity normally means the game is still at its title screen.
      * Keep a per-process fallback instead of repeatedly rerolling rules. */
     if (!has_identity_component) {
-        hash ^= (uint32_t)time(NULL);
-        hash ^= (uint32_t)(uintptr_t)&hash;
+        if (g_fallback_world_identity == 0) {
+            g_fallback_world_identity = (uint32_t)time(NULL) ^
+                                        (uint32_t)(uintptr_t)&hash;
+            if (g_fallback_world_identity == 0) g_fallback_world_identity = 1;
+        }
+        hash ^= g_fallback_world_identity;
     }
     return hash;
 }
@@ -1545,8 +1550,9 @@ static bool game_text_notice(const char *text, uint8_t red, uint8_t green,
         }
     }
 
+    uint64_t ignored_return = 0;
     if (patchlib_method_invoke_args(g_main_new_text_method, PATCH_NULL,
-                                    NULL, args)) {
+                                    &ignored_return, args)) {
         return true;
     }
     if (!g_main_new_text_warning_logged) {
@@ -2728,6 +2734,42 @@ static void discover_main_text_api(patch_handle_t main_type) {
         }
         patchlib_method_signature_free(&sig);
     }
+
+    /* Some IL2CPP metadata tables do not expose overloads through the
+     * parameter-count lookup even though the name lookup still works. Retry
+     * the named method before disabling notices. */
+    patch_handle_t fallback = patchlib_type_get_method(main_type, "NewText");
+    if (fallback && patchlib_is_valid(fallback)) {
+        patch_method_signature_t sig = {0};
+        if (patchlib_method_get_signature(fallback, &sig)) {
+            size_t count = tefstd_vector_size(&sig.arg_types);
+            bool supported = !sig.is_instance && sig.return_type == PATCH_VOID &&
+                             (count == 1 || count == 4) &&
+                             signature_arg_is_text(&sig, 0);
+            patch_type_t color_type = PATCH_UINT8;
+            if (supported && count == 4) {
+                bool byte_color = signature_arg_is(&sig, 1, PATCH_UINT8) &&
+                                  signature_arg_is(&sig, 2, PATCH_UINT8) &&
+                                  signature_arg_is(&sig, 3, PATCH_UINT8);
+                bool int_color = signature_arg_is(&sig, 1, PATCH_INT32) &&
+                                 signature_arg_is(&sig, 2, PATCH_INT32) &&
+                                 signature_arg_is(&sig, 3, PATCH_INT32);
+                supported = byte_color || int_color;
+                if (int_color) color_type = PATCH_INT32;
+            }
+            if (supported) {
+                g_main_new_text_method = fallback;
+                g_main_new_text_arg_count = (int)count;
+                g_main_new_text_color_type = color_type;
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Main.NewText named fallback available: params=%d colorType=%d",
+                          (int)count, (int)color_type);
+                patchlib_method_signature_free(&sig);
+                return;
+            }
+            patchlib_method_signature_free(&sig);
+        }
+    }
     ELITE_LOG(MOD_LOG_LEVEL_WARNING,
               "Main.NewText notice API not found; rule notices will be log-only");
 }
@@ -3012,6 +3054,11 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     (void)args;
     (void)result;
     (void)sig_info;
+    /* Initialise from the first safe NPC-AI callback as a fallback. If this
+     * callback happens before world data is populated, the stable fallback
+     * identity is replaced once Main.worldID/worldName becomes available. */
+    initialize_world_rules();
+    advance_world_rule_clock();
     update_world_rule_notices();
     if (!instance || !is_elite_instance(instance)) return;
 
@@ -3324,9 +3371,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090106,
+    .version_code = 2026090107,
     .api_version = 1,
-    .version = "1.3.1"
+    .version = "1.3.2"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
