@@ -144,7 +144,7 @@ static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
 static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
-#define ENABLE_NAME_SOURCE_HOOK 0
+#define ENABLE_NAME_SOURCE_HOOK 1
 static patch_handle_t g_main_new_text_method = NULL;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
@@ -1769,41 +1769,22 @@ static bool install_name_hook(patch_handle_t method, const char *name) {
 }
 
 static void discover_name_api(patch_handle_t npc) {
-    /* Resolve the managed properties first. On some Android IL2CPP builds the
-     * generated get_* method is not returned by method-name lookup even though
-     * the property metadata still exposes its getter. */
-    const char *name_properties[] = {
-        "FullName", "GivenOrTypeName", "TypeName", "DisplayName",
-        "HoverName", "Name"
-    };
-    const size_t property_count =
-        sizeof(name_properties) / sizeof(name_properties[0]);
-    for (size_t i = 0; i < property_count &&
-                       g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT; ++i) {
-        patch_handle_t property = patchlib_type_get_property(
-            npc, name_properties[i]);
-        if (!property || !patchlib_is_valid(property)) continue;
-        patch_handle_t getter = patchlib_property_get_get_method(property);
-        if (!getter || !patchlib_is_valid(getter)) continue;
-        (void)install_name_hook(getter, name_properties[i]);
-    }
-
-    /* Keep known method names as a fast path, then enumerate the method table
-     * because IL2CPP exports can rename properties or expose them only as
-     * Get* methods. */
+    /* Install exactly one name source hook. The previous build installed every
+     * Name-like method returned by metadata enumeration; that worked on some
+     * desktop layouts but caused SIGILL during the first Android UI frame. */
     const char *name_getters[] = {
-        "get_FullName", "get_TypeName", "get_GivenOrTypeName",
-        "get_DisplayName", "get_HoverName", "get_Name",
-        "GetFullName", "GetTypeName", "GetGivenName", "GetDisplayName",
-        "GetName"
+        "get_FullName", "get_GivenOrTypeName", "get_TypeName",
+        "get_DisplayName", "get_HoverName", "get_Name"
     };
     const size_t known_count = sizeof(name_getters) / sizeof(name_getters[0]);
     for (size_t i = 0; i < known_count; ++i) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(
             npc, name_getters[i], 0);
-        (void)install_name_hook(method, name_getters[i]);
+        if (install_name_hook(method, name_getters[i])) return;
     }
 
+    /* If names were renamed by the IL2CPP export, scan metadata but still
+     * choose only one supported candidate, preferring FullName-like methods. */
     tefstd_vector_t methods = {0};
     if (!tefstd_vector_init(&methods, sizeof(patch_handle_t))) {
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
@@ -1811,9 +1792,11 @@ static void discover_name_api(patch_handle_t npc) {
         return;
     }
     if (patchlib_type_get_methods(npc, true, &methods)) {
+        patch_handle_t selected_method = NULL;
+        const char *selected_name = NULL;
+        int selected_score = INT_MAX;
         size_t method_count = tefstd_vector_size(&methods);
-        for (size_t i = 0; i < method_count &&
-                           g_npc_name_hook_count < NPC_NAME_HOOK_LIMIT; ++i) {
+        for (size_t i = 0; i < method_count; ++i) {
             patch_handle_t *entry = (patch_handle_t *)tefstd_vector_at(&methods, i);
             patch_handle_t method = entry ? *entry : NULL;
             if (!method || !patchlib_is_valid(method)) continue;
@@ -1821,7 +1804,27 @@ static void discover_name_api(patch_handle_t npc) {
             if (!name || (!strstr(name, "Name") && !strstr(name, "name"))) {
                 continue;
             }
-            (void)install_name_hook(method, name);
+            patch_method_signature_t sig = {0};
+            if (!patchlib_method_get_signature(method, &sig)) continue;
+            bool supported = sig.is_instance &&
+                             (sig.return_type == PATCH_OBJECT ||
+                              sig.return_type == PATCH_POINTER) &&
+                             tefstd_vector_size(&sig.arg_types) == 0;
+            patchlib_method_signature_free(&sig);
+            if (!supported) continue;
+
+            int score = 100;
+            if (strstr(name, "FullName") != NULL) score = 0;
+            else if (strstr(name, "GivenOrTypeName") != NULL) score = 10;
+            else if (strstr(name, "TypeName") != NULL) score = 20;
+            if (score < selected_score) {
+                selected_method = method;
+                selected_name = name;
+                selected_score = score;
+            }
+        }
+        if (selected_method) {
+            (void)install_name_hook(selected_method, selected_name);
         }
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "NPC name method discovery complete: methods=%d hooks=%d",
@@ -2527,9 +2530,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090109,
+    .version_code = 2026090110,
     .api_version = 1,
-    .version = "1.4.1"
+    .version = "1.4.2"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
