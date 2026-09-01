@@ -21,6 +21,7 @@ static bool g_initialized = false;
 /* The Android 1.4.5.6.4 UI overloads are not needed for gameplay. Keep them
  * opt-in until the target build's string/rarity ABI has been verified. */
 #define ELITEMONSTERS_ENABLE_UI_HOOKS 0
+#define ELITEMONSTERS_ENABLE_SETDEFAULTS_HOOK 0
 
 #define LOG(level, ...) do { if (mod_logger_write) mod_logger_write(level, "EliteMonsters", __VA_ARGS__); } while (0)
 
@@ -324,8 +325,9 @@ static void apply_profile(void* npc) {
         (int)type, (int)rank, elite_core_progress_name(progress), g_elite_count);
 }
 
-static void setdefaults_postfix(patch_handle_t instance, void** args, void* result,
-                                const patch_method_signature_t* sig) {
+static void __attribute__((unused)) setdefaults_postfix(
+    patch_handle_t instance, void** args, void* result,
+    const patch_method_signature_t* sig) {
     (void)args; (void)result; (void)sig;
     apply_profile(instance);
 }
@@ -478,6 +480,7 @@ void elite_core_init(void) {
     if (!npc) { LOG(MOD_LOG_LEVEL_ERROR, "Terraria.NPC not found"); return; }
     cache_fields(npc);
     for (int count = 0; count <= 4; ++count) {
+#if ELITEMONSTERS_ENABLE_SETDEFAULTS_HOOK
         patch_handle_t method = patchlib_type_get_method_by_param_count(npc, "SetDefaults", count);
         if (!method) continue;
         patch_method_signature_t signature = {0};
@@ -493,6 +496,9 @@ void elite_core_init(void) {
         if (hook != PATCH_HOOK_INVALID_ID && g_ctx.setdefaults_hook_count < 8)
             g_ctx.setdefaults_hooks[g_ctx.setdefaults_hook_count++] = hook;
         patchlib_free(method);
+#else
+        (void)count;
+#endif
     }
     patch_handle_t main = patchlib_type_get_type("Terraria", "Main");
     if (main) {
