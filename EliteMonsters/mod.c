@@ -144,6 +144,7 @@ static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
 static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
+#define ENABLE_NAME_SOURCE_HOOK 0
 static patch_handle_t g_main_new_text_method = NULL;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
@@ -1278,11 +1279,6 @@ static void apply_elite_profile(patch_handle_t instance) {
                                scale * profile.scale_multiplier);
     }
 
-    /* Tint the sprite itself when the current build exposes NPC.color. This
-     * is a safe appearance layer that does not replace the vanilla draw path:
-     * rare elites become blue-tinted and legendary elites purple-tinted. */
-    changed |= write_elite_color(instance, profile.rank);
-
     /* Vanilla NPC.value controls the normal coin drop. Keep the reward
      * entirely vanilla while making higher elite ranks worth more. */
     if (valid_field(g_field_value, PATCH_FLOAT)) {
@@ -1934,33 +1930,14 @@ static bool multiplayer_client(void) {
 
 static void announce_elite_spawn(void *instance, size_t index) {
     if (!instance || index >= PROCESSED_INSTANCE_LIMIT ||
-        g_elite_spawn_announced[index] || !g_main_new_text_method ||
-        !patchlib_is_valid(g_main_new_text_method)) {
+        g_elite_spawn_announced[index]) {
         return;
     }
 
-    int32_t net_mode = 0;
-    (void)read_i32(g_main_net_mode_field, NULL, &net_mode);
-    /* A dedicated server has no local screen. Single-player and multiplayer
-     * clients display the notice once each, while server-side loot remains
-     * authoritative. */
-    if (net_mode == 2) return;
-
-    const char *message = "精英怪出现了！";
-    if (g_elite_ranks[index] == ELITE_RARE) message = "稀有精英出现了！";
-    if (g_elite_ranks[index] == ELITE_LEGENDARY) {
-        message = "传奇精英出现了！";
-    }
-
-    patch_handle_t text = patchlib_string_create(message);
-    if (!text || !patchlib_is_valid(text)) return;
-    void *args[1] = {&text};
-    if (patchlib_method_invoke_args(g_main_new_text_method, PATCH_NULL, NULL,
-                                    args)) {
-        g_elite_spawn_announced[index] = true;
-        ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                  "Elite spawn notice shown: rank=%d", (int)g_elite_ranks[index]);
-    }
+    /* UI method invocation is intentionally disabled until the exact
+     * NewText overload is verified on-device. Mark the state so this optional
+     * path cannot be retried every AI tick. */
+    g_elite_spawn_announced[index] = true;
 }
 
 static uint32_t legendary_action_interval(elite_behavior_t behavior,
@@ -2474,12 +2451,19 @@ static void init_mod(kernel_mod_handle_t* handle) {
     discover_spawn_api();
     patch_handle_t npc = patchlib_type_get_type("Terraria", "NPC");
     if (npc && patchlib_is_valid(npc)) {
+#if ENABLE_NAME_SOURCE_HOOK
         discover_name_api(npc);
+#else
+        /* The current Android build crashes during the first UI frame when
+         * multiple NPC string getters are patched. Keep vanilla name drawing
+         * enabled while a render-level name path is developed. */
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "NPC name source hooks disabled for Android stability");
+#endif
         discover_ai_api(npc);
     }
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
-        discover_new_text_api(main_type);
         discover_mouse_text_api(main_type);
         if (npc && patchlib_is_valid(npc)) {
             patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
@@ -2543,9 +2527,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090108,
+    .version_code = 2026090109,
     .api_version = 1,
-    .version = "1.4.0"
+    .version = "1.4.1"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

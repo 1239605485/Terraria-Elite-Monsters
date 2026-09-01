@@ -1,4 +1,4 @@
-# EliteMonsters 1.4.0 正式版（liuxin 四档难度、词缀、视觉反馈与战利品版）
+# EliteMonsters 1.4.1 正式版（liuxin 四档难度、词缀、技能与战利品稳定版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -46,7 +46,7 @@ clients do not duplicate teleports. If a game build does not expose a safe
 `velocity`, `position`, or `Main.player` field, the affected movement is
 skipped while the rest of the mod remains active.
 
-Version 1.4.0 includes six visible affixes. Flame increases damage and periodically
+Version 1.4.1 includes six visible affixes. Flame increases damage and periodically
 dashes, Frost adds defense and knockback resistance, Vampiric periodically heals,
 Split triggers one half-health second wind and dash, Enraged adds the low-health
 damage phase to non-legendary ranks, and Abyssal adds health, damage, and periodic
@@ -59,9 +59,11 @@ enumerating the current NPC method table, which covers different IL2CPP name
 getter exports and Android string metadata variants.
 
 Normal elites now perform a low-frequency burst, rare elites perform a faster
-burst, and legendary elites retain their type-aware movement. When the current
-build exposes `Main.NewText` and `NPC.color`, the mod also shows a one-time
-ranked spawn notice and applies white/blue/purple sprite tinting. Loot is split
+burst, and legendary elites retain their type-aware movement. The stable
+`Main.MouseText` path continues to provide white/blue/purple name colors; the
+unstable multi-getter name-source, direct `NPC.color` write, and `Main.NewText`
+UI invocation are disabled in 1.4.1 until their exact Android overloads are
+verified. Loot is split
 by rank: normal elites drop a small potion bundle and a progression material;
 rare elites drop a progression material and a useful vanilla equipment item;
 legendary elites retain the 70% common crate / 30% environment crate roll and
@@ -80,7 +82,7 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.4.0 directly asks TEFKernel to hook the known
+installable package. Version 1.4.1 directly asks TEFKernel to hook the known
 parameterless `NPC.AI()` dispatcher, installs an `NPC.NPCLoot` postfix for the
 three rank-specific reward bundles and guaranteed legendary crate distribution
 (70% common, 30% current-environment), and uses the
