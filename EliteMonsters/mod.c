@@ -140,11 +140,15 @@ static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
 static size_t g_setdefaults_hook_count = 0;
-#define NPC_NAME_HOOK_LIMIT 8
+#define NPC_NAME_HOOK_LIMIT 1
 static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
 static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
 #define ENABLE_NAME_SOURCE_HOOK 1
+static unsigned long g_npc_name_calls = 0;
+static bool g_pending_name_valid = false;
+static char g_pending_source_name[512];
+static char g_pending_decorated_name[512];
 static patch_handle_t g_main_new_text_method = NULL;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
@@ -1456,6 +1460,8 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
     (void)sig_info;
     if (!instance || !result || !is_elite_instance(instance)) return;
 
+    ++g_npc_name_calls;
+
     patch_handle_t original = *(patch_handle_t *)result;
     if (!original || !patchlib_is_valid(original)) return;
     char *name = patchlib_string_cstr(original);
@@ -1484,6 +1490,18 @@ static void npc_name_postfix(patch_handle_t instance, void **args, void *result,
         (void)snprintf(decorated + offset, sizeof(decorated) - offset, "%s",
                        name);
     }
+
+    /* Keep a short-lived copy for Main.MouseText. On some Android IL2CPP
+     * builds the postfix result slot is read-only after the native bridge
+     * returns, even though the callback itself ran successfully. MouseText
+     * is the final UI boundary, so it can still receive the decorated name
+     * without installing a second NPC name hook. */
+    (void)snprintf(g_pending_source_name, sizeof(g_pending_source_name),
+                   "%s", name);
+    (void)snprintf(g_pending_decorated_name, sizeof(g_pending_decorated_name),
+                   "%s", decorated);
+    g_pending_name_valid = true;
+
     patch_handle_t replacement = patchlib_string_create(decorated);
     if (replacement && patchlib_is_valid(replacement)) {
         *(patch_handle_t *)result = replacement;
@@ -1768,10 +1786,39 @@ static bool install_name_hook(patch_handle_t method, const char *name) {
     return true;
 }
 
+static bool install_name_property_hook(patch_handle_t npc,
+                                       const char *property_name) {
+    if (!npc || !patchlib_is_valid(npc) || !property_name ||
+        g_npc_name_hook_count >= NPC_NAME_HOOK_LIMIT) {
+        return false;
+    }
+
+    patch_handle_t property = patchlib_type_get_property(npc, property_name);
+    if (!property || !patchlib_is_valid(property)) return false;
+
+    patch_handle_t getter = patchlib_property_get_get_method(property);
+    if (!getter || !patchlib_is_valid(getter)) return false;
+
+    /* The property API is more reliable on Android than looking up the
+     * compiler-generated get_* export. install_name_hook still validates the
+     * signature and enforces the one-hook safety limit. */
+    return install_name_hook(getter, property_name);
+}
+
 static void discover_name_api(patch_handle_t npc) {
     /* Install exactly one name source hook. The previous build installed every
      * Name-like method returned by metadata enumeration; that worked on some
      * desktop layouts but caused SIGILL during the first Android UI frame. */
+    const char *name_properties[] = {
+        "FullName", "GivenOrTypeName", "TypeName", "DisplayName",
+        "HoverName", "Name"
+    };
+    const size_t property_count =
+        sizeof(name_properties) / sizeof(name_properties[0]);
+    for (size_t i = 0; i < property_count; ++i) {
+        if (install_name_property_hook(npc, name_properties[i])) return;
+    }
+
     const char *name_getters[] = {
         "get_FullName", "get_GivenOrTypeName", "get_TypeName",
         "get_DisplayName", "get_HoverName", "get_Name"
@@ -1781,6 +1828,15 @@ static void discover_name_api(patch_handle_t npc) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(
             npc, name_getters[i], 0);
         if (install_name_hook(method, name_getters[i])) return;
+    }
+
+    /* A few metadata adapters expose the property getter under the property
+     * name itself instead of get_PropertyName. Keep this fallback single-shot
+     * so it remains safe on the Android ARM64 bridge. */
+    for (size_t i = 0; i < property_count; ++i) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            npc, name_properties[i], 0);
+        if (install_name_hook(method, name_properties[i])) return;
     }
 
     /* If names were renamed by the IL2CPP export, scan metadata but still
@@ -1854,15 +1910,34 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
     char *text = patchlib_string_cstr(text_handle);
     if (!text) return true;
 
+    const char *effective_text = text;
+    bool injected_name = false;
+    if (g_pending_name_valid) {
+        if (strcmp(text, g_pending_source_name) == 0) {
+            patch_handle_t replacement =
+                patchlib_string_create(g_pending_decorated_name);
+            if (replacement && patchlib_is_valid(replacement)) {
+                *(patch_handle_t *)args[0] = replacement;
+                effective_text = g_pending_decorated_name;
+                injected_name = true;
+            }
+        } else {
+            /* Do not let a name obtained in an unrelated UI path decorate a
+             * later tooltip. */
+            g_pending_name_valid = false;
+        }
+    }
+
     int rarity = -1;
-    if (strstr(text, "传奇·") != NULL) {
+    if (strstr(effective_text, "传奇·") != NULL) {
         rarity = 11;
-    } else if (strstr(text, "稀有·") != NULL) {
+    } else if (strstr(effective_text, "稀有·") != NULL) {
         rarity = 1;
-    } else if (strstr(text, "精英·") != NULL) {
+    } else if (strstr(effective_text, "精英·") != NULL) {
         rarity = 0;
     }
     free(text);
+    if (injected_name) g_pending_name_valid = false;
     if (rarity < 0) return true;
 
     const size_t arg_count = tefstd_vector_size(&sig_info->arg_types);
@@ -2525,14 +2600,18 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     memset(g_elite_split_triggered, 0, sizeof(g_elite_split_triggered));
     g_setdefaults_calls = 0;
     g_elite_count = 0;
+    g_npc_name_calls = 0;
+    g_pending_name_valid = false;
+    memset(g_pending_source_name, 0, sizeof(g_pending_source_name));
+    memset(g_pending_decorated_name, 0, sizeof(g_pending_decorated_name));
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090110,
+    .version_code = 2026090111,
     .api_version = 1,
-    .version = "1.4.2"
+    .version = "1.4.3"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
