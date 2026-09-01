@@ -18,6 +18,10 @@ static size_t g_state_count = 0;
 static unsigned long g_elite_count = 0;
 static bool g_initialized = false;
 
+/* The Android 1.4.5.6.4 UI overloads are not needed for gameplay. Keep them
+ * opt-in until the target build's string/rarity ABI has been verified. */
+#define ELITEMONSTERS_ENABLE_UI_HOOKS 0
+
 #define LOG(level, ...) do { if (mod_logger_write) mod_logger_write(level, "EliteMonsters", __VA_ARGS__); } while (0)
 
 static bool valid(patch_handle_t handle) {
@@ -467,7 +471,10 @@ void elite_core_init(void) {
         patchlib_free(method);
     }
     patch_handle_t main = patchlib_type_get_type("Terraria", "Main");
-    if (main) { install_ui_hooks(npc, main); patchlib_free(main); }
+    if (main) {
+        if (ELITEMONSTERS_ENABLE_UI_HOOKS) install_ui_hooks(npc, main);
+        patchlib_free(main);
+    }
     patchlib_free(npc);
     g_initialized = true;
     LOG(MOD_LOG_LEVEL_INFO, "Elite core initialized; biome rules can use 10 vanilla zone flags");
