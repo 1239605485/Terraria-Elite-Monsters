@@ -263,6 +263,9 @@ static uint32_t g_terrain_report_cooldown = 0;
 static uint32_t g_tide_cooldown = 0;
 static uint32_t g_spawn_events_this_tick = 0;
 
+static bool game_text_notice(const char *text, uint8_t red, uint8_t green,
+                             uint8_t blue);
+
 #define GLOBAL_RULE_SHIFT_INTERVAL 1800u
 #define RULE_PROJECTILE_INTERVAL 150u
 #define TERRAIN_ACTION_INTERVAL 120u
@@ -453,6 +456,10 @@ static patch_handle_t g_main_world_id_field = NULL;
 static patch_handle_t g_main_day_time_field = NULL;
 static patch_handle_t g_main_snow_storm_field = NULL;
 static patch_handle_t g_main_update_count_field = NULL;
+static patch_handle_t g_main_new_text_method = NULL;
+static int g_main_new_text_arg_count = 0;
+static patch_type_t g_main_new_text_color_type = PATCH_UINT8;
+static bool g_main_new_text_warning_logged = false;
 static patch_handle_t g_item_new_item_method = NULL;
 static patch_handle_t g_npc_new_npc_method = NULL;
 static int g_npc_new_npc_arg_count = 0;
@@ -1117,6 +1124,29 @@ static void initialize_world_rules(void) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO, "Global rule %d: %s",
                   (int)i, g_global_rule_names[g_global_rules[i]]);
     }
+
+    char notice[768];
+    int offset = snprintf(notice, sizeof(notice),
+                          "[精英变异] 本世界已生成 %d 条全局规则：",
+                          (int)g_global_rule_count);
+    if (offset < 0) return;
+    if ((size_t)offset >= sizeof(notice)) offset = (int)sizeof(notice) - 1;
+    for (size_t i = 0; i < g_global_rule_count &&
+                        (size_t)offset < sizeof(notice); ++i) {
+        int written = snprintf(notice + offset, sizeof(notice) - (size_t)offset,
+                               "%s%s", i == 0 ? " " : "、",
+                               g_global_rule_names[g_global_rules[i]]);
+        if (written < 0) break;
+        if ((size_t)written >= sizeof(notice) - (size_t)offset) {
+            offset = (int)sizeof(notice) - 1;
+            break;
+        }
+        offset += written;
+    }
+    notice[sizeof(notice) - 1] = '\0';
+    (void)game_text_notice(notice, 255, 220, 80);
+    (void)game_text_notice("[精英变异] 地形规则会随玩家进入或离开区域自动切换。",
+                           180, 220, 255);
 }
 
 static void advance_world_rule_clock(void) {
@@ -1151,6 +1181,11 @@ static void advance_world_rule_clock(void) {
         g_dynamic_rule = next;
         ELITE_LOG(MOD_LOG_LEVEL_INFO, "Danger rule rotated: %s",
                   g_global_rule_names[g_dynamic_rule]);
+        char notice[192];
+        (void)snprintf(notice, sizeof(notice),
+                       "[精英变异] 危险轮换：当前临时规则为「%s」",
+                       g_global_rule_names[g_dynamic_rule]);
+        (void)game_text_notice(notice, 255, 150, 80);
     }
 }
 
@@ -1215,18 +1250,54 @@ static terrain_rule_t terrain_rule_for_player(int32_t player_index) {
     return TERRAIN_RULE_FOREST;
 }
 
+static const char *terrain_display_name(terrain_rule_t terrain) {
+    static const char *names[TERRAIN_RULE_COUNT] = {
+        "未知区域", "森林", "沙漠", "雪原", "丛林", "海洋",
+        "地下", "洞穴", "腐化之地", "猩红之地", "神圣之地", "地牢",
+        "地狱", "发光蘑菇地", "蜘蛛洞", "蜥蜴神庙", "太空", "陨石区域",
+        "洞穴冰层", "沙漠地下", "世纪之花后丛林"
+    };
+    if (terrain < TERRAIN_RULE_NONE || terrain >= TERRAIN_RULE_COUNT) {
+        return names[TERRAIN_RULE_NONE];
+    }
+    return names[terrain];
+}
+
 static void report_terrain_transition(terrain_rule_t terrain) {
     if (terrain == g_last_reported_terrain || g_terrain_report_cooldown > 0) {
         return;
     }
+    terrain_rule_t previous = g_last_reported_terrain;
     g_last_reported_terrain = terrain;
     g_terrain_report_cooldown = 30;
     if (terrain > TERRAIN_RULE_NONE && terrain < TERRAIN_RULE_COUNT) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO, "Terrain rule enabled: %s - %s",
                   g_terrain_rule_info[terrain].name,
                   g_terrain_rule_info[terrain].description);
+        char notice[384];
+        if (previous > TERRAIN_RULE_NONE && previous < TERRAIN_RULE_COUNT) {
+            (void)snprintf(notice, sizeof(notice),
+                           "[精英变异] 地形规则切换：%s → %s",
+                           terrain_display_name(previous),
+                           terrain_display_name(terrain));
+        } else {
+            (void)snprintf(notice, sizeof(notice), "[精英变异] 进入地形：%s",
+                           terrain_display_name(terrain));
+        }
+        (void)game_text_notice(notice, 140, 255, 170);
+        (void)snprintf(notice, sizeof(notice), "专属规则：%s——%s",
+                       g_terrain_rule_info[terrain].name,
+                       g_terrain_rule_info[terrain].description);
+        (void)game_text_notice(notice, 140, 220, 255);
     } else {
         ELITE_LOG(MOD_LOG_LEVEL_INFO, "Terrain rule disabled");
+        if (previous > TERRAIN_RULE_NONE && previous < TERRAIN_RULE_COUNT) {
+            char notice[192];
+            (void)snprintf(notice, sizeof(notice),
+                           "[精英变异] 已离开%s，专属规则已关闭",
+                           terrain_display_name(previous));
+            (void)game_text_notice(notice, 180, 220, 255);
+        }
     }
 }
 
@@ -1435,6 +1506,55 @@ static bool signature_arg_is(const patch_method_signature_t *sig, size_t index,
     patch_type_t *actual = (patch_type_t *)tefstd_vector_at(
         (tefstd_vector_t *)&sig->arg_types, index);
     return actual && *actual == expected;
+}
+
+static bool signature_arg_is_text(const patch_method_signature_t *sig,
+                                  size_t index) {
+    return signature_arg_is(sig, index, PATCH_OBJECT) ||
+           signature_arg_is(sig, index, PATCH_POINTER);
+}
+
+static bool game_text_notice(const char *text, uint8_t red, uint8_t green,
+                             uint8_t blue) {
+    if (!text || !text[0] || !g_main_new_text_method ||
+        !patchlib_is_valid(g_main_new_text_method)) {
+        if (!g_main_new_text_warning_logged) {
+            ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                      "Main.NewText unavailable; in-game rule notices disabled");
+            g_main_new_text_warning_logged = true;
+        }
+        return false;
+    }
+
+    patch_handle_t message = patchlib_string_create(text);
+    if (!message || !patchlib_is_valid(message)) return false;
+
+    void *args[4] = {&message, NULL, NULL, NULL};
+    int32_t red_i = red;
+    int32_t green_i = green;
+    int32_t blue_i = blue;
+    if (g_main_new_text_arg_count == 4) {
+        if (g_main_new_text_color_type == PATCH_UINT8) {
+            args[1] = &red;
+            args[2] = &green;
+            args[3] = &blue;
+        } else {
+            args[1] = &red_i;
+            args[2] = &green_i;
+            args[3] = &blue_i;
+        }
+    }
+
+    if (patchlib_method_invoke_args(g_main_new_text_method, PATCH_NULL,
+                                    NULL, args)) {
+        return true;
+    }
+    if (!g_main_new_text_warning_logged) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Main.NewText invocation failed; in-game rule notices disabled");
+        g_main_new_text_warning_logged = true;
+    }
+    return false;
 }
 
 static bool spawn_rule_npc_at(int32_t x, int32_t y, int32_t npc_type) {
@@ -2568,6 +2688,50 @@ static void discover_mouse_text_api(patch_handle_t main_type) {
     }
 }
 
+/* Main.NewText is the vanilla chat/toast path. Resolve only signatures that
+ * are safe to invoke through the public argument-array API. One-argument
+ * overloads use Terraria's default white text; the four-argument overload is
+ * preferred when it exposes byte or int RGB parameters. */
+static void discover_main_text_api(patch_handle_t main_type) {
+    const int arg_counts[2] = {4, 1};
+    for (size_t i = 0; i < 2; ++i) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            main_type, "NewText", arg_counts[i]);
+        if (!method || !patchlib_is_valid(method)) continue;
+
+        patch_method_signature_t sig = {0};
+        if (!patchlib_method_get_signature(method, &sig)) continue;
+        bool supported = !sig.is_instance && sig.return_type == PATCH_VOID &&
+                         tefstd_vector_size(&sig.arg_types) ==
+                             (size_t)arg_counts[i] &&
+                         signature_arg_is_text(&sig, 0);
+        patch_type_t color_type = PATCH_UINT8;
+        if (supported && arg_counts[i] == 4) {
+            bool byte_color = signature_arg_is(&sig, 1, PATCH_UINT8) &&
+                              signature_arg_is(&sig, 2, PATCH_UINT8) &&
+                              signature_arg_is(&sig, 3, PATCH_UINT8);
+            bool int_color = signature_arg_is(&sig, 1, PATCH_INT32) &&
+                             signature_arg_is(&sig, 2, PATCH_INT32) &&
+                             signature_arg_is(&sig, 3, PATCH_INT32);
+            supported = byte_color || int_color;
+            if (int_color) color_type = PATCH_INT32;
+        }
+        if (supported) {
+            g_main_new_text_method = method;
+            g_main_new_text_arg_count = arg_counts[i];
+            g_main_new_text_color_type = color_type;
+            ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                      "Main.NewText notice API available: params=%d colorType=%d",
+                      arg_counts[i], (int)color_type);
+            patchlib_method_signature_free(&sig);
+            return;
+        }
+        patchlib_method_signature_free(&sig);
+    }
+    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+              "Main.NewText notice API not found; rule notices will be log-only");
+}
+
 static void request_npc_net_update(patch_handle_t instance) {
     if (!instance) return;
     (void)write_bool(g_field_net_update, instance, true);
@@ -2823,6 +2987,22 @@ static void apply_legendary_movement(patch_handle_t instance, size_t index,
     }
 }
 
+/* This runs before the elite-instance filter. A world can contain no elite
+ * NPCs for a while, but the player should still receive the rule summary and
+ * terrain transition notices as soon as normal NPC AI is active. It performs
+ * reads only; all combat mutation remains restricted to tracked elites. */
+static void update_world_rule_notices(void) {
+    int32_t local_player = -1;
+    if (!read_i32(g_main_my_player_field, NULL, &local_player)) return;
+
+    elite_vector2_t player_position = {0.0f, 0.0f};
+    if (!read_player_state(local_player, &player_position, NULL, NULL)) return;
+
+    initialize_world_rules();
+    advance_world_rule_clock();
+    report_terrain_transition(terrain_rule_for_player(local_player));
+}
+
 /* AI enhancement layer. The original NPC.AI runs first. Normal and rare
  * elites retain the earlier target-lock/dash behavior. Legendary elites add
  * type-aware movement, a one-time low-health enrage, and true knockback
@@ -2832,6 +3012,7 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     (void)args;
     (void)result;
     (void)sig_info;
+    update_world_rule_notices();
     if (!instance || !is_elite_instance(instance)) return;
 
     initialize_world_rules();
@@ -3058,6 +3239,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     }
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
+        discover_main_text_api(main_type);
         discover_mouse_text_api(main_type);
         if (npc && patchlib_is_valid(npc)) {
             patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
@@ -3107,6 +3289,10 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_chest_hook_count = 0;
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
+    g_main_new_text_method = NULL;
+    g_main_new_text_arg_count = 0;
+    g_main_new_text_color_type = PATCH_UINT8;
+    g_main_new_text_warning_logged = false;
     g_item_new_item_method = NULL;
     g_npc_new_npc_method = NULL;
     g_npc_new_npc_arg_count = 0;
@@ -3138,9 +3324,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090105,
+    .version_code = 2026090106,
     .api_version = 1,
-    .version = "1.3.0"
+    .version = "1.3.1"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
