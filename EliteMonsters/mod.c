@@ -146,7 +146,6 @@ static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
 #define ENABLE_NAME_SOURCE_HOOK 1
 static unsigned long g_npc_name_calls = 0;
-static patch_handle_t g_language_name_method = NULL;
 static bool g_pending_name_valid = false;
 static char g_pending_source_name[512];
 static char g_pending_decorated_name[512];
@@ -1306,16 +1305,6 @@ static void apply_elite_profile(patch_handle_t instance) {
     remember_elite_instance(instance, profile.rank, detect_behavior(instance),
                             elite_damage, profile.affix_mask, npc_type);
 
-    /* Warm the vanilla name cache immediately. This makes the later
-     * Main.MouseText fallback independent of whether this particular UI
-     * path calls the hooked Lang method before drawing the tooltip. */
-    if (g_language_name_method && patchlib_is_valid(g_language_name_method)) {
-        int32_t name_type = npc_type;
-        patch_handle_t ignored_name = NULL;
-        void *name_args[1] = {&name_type};
-        (void)patchlib_method_invoke_args(g_language_name_method, PATCH_NULL,
-                                           &ignored_name, name_args);
-    }
     if (changed) {
         ++g_elite_count;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
@@ -1959,7 +1948,6 @@ static bool install_language_name_hook(void) {
     g_npc_name_hooks[0] = hook_id;
     g_npc_name_tokens[0] = patchlib_method_get_token(method);
     g_npc_name_hook_count = 1;
-    g_language_name_method = method;
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
               "NPC language name hook installed: GetNPCNameValue id=%d",
               (int)hook_id);
@@ -2776,7 +2764,6 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
     g_main_new_text_method = NULL;
-    g_language_name_method = NULL;
     g_item_new_item_method = NULL;
     g_field_color = NULL;
     g_field_who_am_i = NULL;
@@ -2804,9 +2791,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090113,
+    .version_code = 2026090114,
     .api_version = 1,
-    .version = "1.4.5"
+    .version = "1.4.6"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
