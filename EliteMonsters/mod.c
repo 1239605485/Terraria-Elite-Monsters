@@ -135,7 +135,7 @@ static const elite_mode_modifier_t g_mode_modifiers[ELITE_MODE_COUNT] = {
 
 /* 正式配置：按普通、专家、大师、传奇顺序排列，每档递增 10%。 */
 static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
-    20, 30, 40, 50
+    100, 100, 100, 100
 };
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
