@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.0（四档精英怪与地形变异版）
+# EliteMonsters 1.3.1（Android AI 安全修复测试版）
 
 This version is authored by `liuxin`. The mod keeps the four difficulty profiles,
 progress-scaled elite NPCs, original rewards and legendary AI. It also adds a

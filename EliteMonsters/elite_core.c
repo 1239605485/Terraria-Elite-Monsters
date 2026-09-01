@@ -63,10 +63,15 @@ bool elite_core_valid_field(patch_handle_t field, patch_type_t type) {
 static bool get_value(patch_handle_t field, patch_handle_t instance, void* out) {
     if (!valid(field) || !out) return false;
 #if defined(__ANDROID__)
-    if (!instance && patchlib_field_is_static(field)) {
-        void* raw = patchlib_field_get_pointer(field, NULL);
+    /* On Android, read the resolved field address directly. The generic
+     * get_value bridge is intended for desktop handles and can dereference
+     * an IL2CPP instance incorrectly inside a per-frame hook. */
+    {
+        void* raw = patchlib_field_get_pointer(field, instance);
         if (!raw) return false;
-        memcpy(out, raw, patchlib_field_get_size(field));
+        size_t size = patchlib_field_get_size(field);
+        if (size == 0 || size > 16) return false;
+        memcpy(out, raw, size);
         return true;
     }
 #endif
@@ -77,10 +82,14 @@ static bool get_value(patch_handle_t field, patch_handle_t instance, void* out) 
 static bool set_value(patch_handle_t field, patch_handle_t instance, void* value) {
     if (!valid(field) || !value) return false;
 #if defined(__ANDROID__)
-    if (!instance && patchlib_field_is_static(field)) {
-        void* raw = patchlib_field_get_pointer(field, NULL);
+    /* Match get_value: use the Android-resolved address for both instance and
+     * static fields, avoiding the generic bridge in hot callbacks. */
+    {
+        void* raw = patchlib_field_get_pointer(field, instance);
         if (!raw) return false;
-        memcpy(raw, value, patchlib_field_get_size(field));
+        size_t size = patchlib_field_get_size(field);
+        if (size == 0 || size > 16) return false;
+        memcpy(raw, value, size);
         return true;
     }
 #endif
