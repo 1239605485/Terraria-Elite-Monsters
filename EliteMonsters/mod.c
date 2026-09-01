@@ -153,6 +153,9 @@ static patch_handle_t g_main_new_text_method = NULL;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
 static size_t g_mouse_text_hook_count = 0;
+#define MOUSE_TEXT_HACK_HOOK_LIMIT 2
+static patch_hook_id_t g_mouse_text_hack_hooks[MOUSE_TEXT_HACK_HOOK_LIMIT];
+static size_t g_mouse_text_hack_hook_count = 0;
 #define AI_HOOK_LIMIT 1
 static patch_hook_id_t g_ai_hooks[AI_HOOK_LIMIT];
 static size_t g_ai_hook_count = 0;
@@ -2128,6 +2131,132 @@ static bool mouse_text_prefix(patch_handle_t instance, void **args,
     return true;
 }
 
+/* NPC hover text is assembled through Main.MouseTextHackZoom before it
+ * reaches Main.MouseText.  On the Android 1.4.5 build the latter can be
+ * inlined or bypassed, so patch the small static wrapper as well.  The
+ * wrapper's first argument is the same System.String handle and its second
+ * argument is the vanilla rarity integer. */
+static bool mouse_text_hack_prefix(patch_handle_t instance, void **args,
+                                   const patch_method_signature_t *sig_info,
+                                   void *result) {
+    (void)instance;
+    (void)result;
+    if (!args || !sig_info || sig_info->is_instance ||
+        tefstd_vector_size(&sig_info->arg_types) < 2 ||
+        !args[0] || !args[1]) {
+        return true;
+    }
+
+    patch_handle_t text_handle = *(patch_handle_t *)args[0];
+    if (!text_handle || !patchlib_is_valid(text_handle)) return true;
+    char *text = patchlib_string_cstr(text_handle);
+    if (!text) return true;
+
+    const char *effective_text = text;
+    char decorated[512];
+    bool injected_name = false;
+
+    if (g_pending_name_valid) {
+        if (strcmp(text, g_pending_source_name) == 0) {
+            patch_handle_t replacement =
+                patchlib_string_create(g_pending_decorated_name);
+            if (replacement && patchlib_is_valid(replacement)) {
+                *(patch_handle_t *)args[0] = replacement;
+                effective_text = g_pending_decorated_name;
+                injected_name = true;
+            }
+        } else {
+            /* A name getter can also run for another UI element. Never carry
+             * that pending replacement into a later tooltip. */
+            g_pending_name_valid = false;
+        }
+    }
+
+    if (!injected_name &&
+        strstr(effective_text, "精英·") == NULL &&
+        strstr(effective_text, "稀有·") == NULL &&
+        strstr(effective_text, "传奇·") == NULL) {
+        for (size_t i = 0; i < g_elite_instance_count; ++i) {
+            if (!g_elite_active[i] || !g_elite_source_names[i][0] ||
+                strcmp(effective_text, g_elite_source_names[i]) != 0) {
+                continue;
+            }
+            if (compose_elite_name(decorated, sizeof(decorated),
+                                   effective_text, g_elite_ranks[i],
+                                   g_elite_affix_masks[i])) {
+                patch_handle_t replacement = patchlib_string_create(decorated);
+                if (replacement && patchlib_is_valid(replacement)) {
+                    *(patch_handle_t *)args[0] = replacement;
+                    effective_text = decorated;
+                    injected_name = true;
+                }
+            }
+            break;
+        }
+    }
+
+    int rarity = -1;
+    if (strstr(effective_text, "传奇·") != NULL) {
+        rarity = 11;
+    } else if (strstr(effective_text, "稀有·") != NULL) {
+        rarity = 1;
+    } else if (strstr(effective_text, "精英·") != NULL) {
+        rarity = 0;
+    }
+
+    free(text);
+    if (injected_name) g_pending_name_valid = false;
+    if (rarity >= 0) *(int *)args[1] = rarity;
+    return true;
+}
+
+static bool mouse_text_hack_signature_supported(
+    const patch_method_signature_t *sig) {
+    if (!sig || sig->is_instance || sig->return_type != PATCH_VOID) {
+        return false;
+    }
+    size_t count = tefstd_vector_size(&sig->arg_types);
+    if (count != 3 && count != 4) return false;
+
+    patch_type_t *text_type =
+        (patch_type_t *)tefstd_vector_at(&sig->arg_types, 0);
+    patch_type_t *rare_type =
+        (patch_type_t *)tefstd_vector_at(&sig->arg_types, 1);
+    if (!text_type || !rare_type) return false;
+    bool text_supported = *text_type == PATCH_OBJECT ||
+                           *text_type == PATCH_POINTER;
+    return text_supported && *rare_type == PATCH_INT32;
+}
+
+static void discover_mouse_text_hack_api(patch_handle_t main_type) {
+    /* Depending on the Terraria build, optional arguments are either exposed
+     * as one 4-parameter method or as a 3-parameter overload.  Try both, but
+     * only accept the known static-void layout. */
+    const int arg_counts[MOUSE_TEXT_HACK_HOOK_LIMIT] = {4, 3};
+    for (size_t i = 0; i < MOUSE_TEXT_HACK_HOOK_LIMIT; ++i) {
+        if (g_mouse_text_hack_hook_count >= MOUSE_TEXT_HACK_HOOK_LIMIT) {
+            break;
+        }
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            main_type, "MouseTextHackZoom", arg_counts[i]);
+        if (!method || !patchlib_is_valid(method)) continue;
+
+        patch_method_signature_t sig = {0};
+        if (!patchlib_method_get_signature(method, &sig)) continue;
+        bool supported = mouse_text_hack_signature_supported(&sig);
+        patchlib_method_signature_free(&sig);
+        if (!supported) continue;
+
+        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+            method, mouse_text_hack_prefix, NULL);
+        if (hook_id == PATCH_HOOK_INVALID_ID) continue;
+        g_mouse_text_hack_hooks[g_mouse_text_hack_hook_count++] = hook_id;
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Main.MouseTextHackZoom hook installed: params=%d id=%d",
+                  arg_counts[i], (int)hook_id);
+    }
+}
+
 static void discover_mouse_text_api(patch_handle_t main_type) {
     const int arg_counts[MOUSE_TEXT_HOOK_LIMIT] = {8, 10};
     for (size_t i = 0; i < MOUSE_TEXT_HOOK_LIMIT; ++i) {
@@ -2722,6 +2851,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     }
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
+        discover_mouse_text_hack_api(main_type);
         discover_mouse_text_api(main_type);
         if (npc && patchlib_is_valid(npc)) {
             patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
@@ -2752,6 +2882,10 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_mouse_text_hooks[i]);
     }
     g_mouse_text_hook_count = 0;
+    for (size_t i = 0; i < g_mouse_text_hack_hook_count; ++i) {
+        patchlib_uninstall_hook(g_mouse_text_hack_hooks[i]);
+    }
+    g_mouse_text_hack_hook_count = 0;
     for (size_t i = 0; i < g_ai_hook_count; ++i) {
         patchlib_uninstall_hook(g_ai_hooks[i]);
     }
