@@ -135,7 +135,7 @@ static const elite_mode_modifier_t g_mode_modifiers[ELITE_MODE_COUNT] = {
 
 /* 正式配置：按普通、专家、大师、传奇顺序排列，每档递增 10%。 */
 static const int g_spawn_chance_percent[ELITE_MODE_COUNT] = {
-    100, 100, 100, 100
+    20, 30, 40, 50
 };
 #define SETDEFAULTS_HOOK_LIMIT 8
 static patch_hook_id_t g_setdefaults_hooks[SETDEFAULTS_HOOK_LIMIT];
@@ -144,6 +144,7 @@ static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_npc_name_hooks[NPC_NAME_HOOK_LIMIT];
 static size_t g_npc_name_hook_count = 0;
 static int g_npc_name_tokens[NPC_NAME_HOOK_LIMIT];
+static patch_handle_t g_main_new_text_method = NULL;
 #define MOUSE_TEXT_HOOK_LIMIT 2
 static patch_hook_id_t g_mouse_text_hooks[MOUSE_TEXT_HOOK_LIMIT];
 static size_t g_mouse_text_hook_count = 0;
@@ -156,8 +157,6 @@ static patch_hook_id_t g_loot_hooks[LOOT_HOOK_LIMIT];
 static size_t g_loot_hook_count = 0;
 static unsigned long g_setdefaults_calls = 0;
 static unsigned long g_elite_count = 0;
-static unsigned long g_rare_reward_count = 0;
-static unsigned long g_legendary_reward_count = 0;
 
 /* Terraria keeps a fixed NPC object pool and reuses the same object pointer
  * for many different spawns.  State stored here therefore describes only the
@@ -172,6 +171,8 @@ static uint32_t g_elite_ai_ticks[PROCESSED_INSTANCE_LIMIT];
 static int32_t g_elite_base_damage[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_enraged[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_rewarded[PROCESSED_INSTANCE_LIMIT];
+static uint32_t g_elite_reward_mask[PROCESSED_INSTANCE_LIMIT];
+static bool g_elite_spawn_announced[PROCESSED_INSTANCE_LIMIT];
 static uint32_t g_elite_affix_masks[PROCESSED_INSTANCE_LIMIT];
 static bool g_elite_split_triggered[PROCESSED_INSTANCE_LIMIT];
 static size_t g_elite_instance_count = 0;
@@ -183,6 +184,7 @@ static size_t g_elite_instance_count = 0;
 #define ITEM_TITANIUM_CRATE 3981
 #define ITEM_MANA_CRYSTAL 109
 #define ITEM_FALLEN_STAR 75
+#define ITEM_GEL 23
 #define ITEM_MAGIC_MIRROR 50
 #define ITEM_HERMES_BOOTS 54
 #define ITEM_CLOUD_IN_A_BOTTLE 53
@@ -243,62 +245,101 @@ typedef struct vanilla_reward_entry_t {
 
 #define PROGRESS_REWARD_POOL_SIZE 8
 
-/* A rare elite gives one random original item from the current progression
- * tier.  Pools deliberately use materials/utility items rather than custom
- * content, and stack ranges keep the reward useful without creating a full
- * endgame inventory in one drop. */
+/* A rare elite gives one random useful original equipment item. The separate
+ * material pools below provide the progression material, so this pool never
+ * replaces the requested equipment with a bar or potion. */
 static const vanilla_reward_entry_t
     g_progress_reward_pools[5][PROGRESS_REWARD_POOL_SIZE] = {
         {
-            {ITEM_LIFE_CRYSTAL, 1, 1},
-            {ITEM_MANA_CRYSTAL, 1, 1},
-            {ITEM_FALLEN_STAR, 3, 5},
             {ITEM_MAGIC_MIRROR, 1, 1},
             {ITEM_HERMES_BOOTS, 1, 1},
             {ITEM_CLOUD_IN_A_BOTTLE, 1, 1},
             {ITEM_HOOK, 1, 1},
-            {ITEM_HEALING_POTION, 2, 4}
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HERMES_BOOTS, 1, 1},
+            {ITEM_CLOUD_IN_A_BOTTLE, 1, 1},
+            {ITEM_HOOK, 1, 1}
         },
         {
-            {ITEM_COBALT_BAR, 2, 4},
-            {ITEM_MYTHRIL_BAR, 2, 4},
-            {ITEM_ADAMANTITE_BAR, 2, 4},
-            {ITEM_SOUL_OF_LIGHT, 3, 6},
-            {ITEM_SOUL_OF_NIGHT, 3, 6},
             {ITEM_DEMON_WINGS, 1, 1},
             {ITEM_ANGEL_WINGS, 1, 1},
-            {ITEM_GREATER_HEALING_POTION, 3, 6}
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1},
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1}
         },
         {
-            {ITEM_HALLOWED_BAR, 2, 4},
-            {ITEM_CHLOROPHYTE_ORE, 8, 16},
-            {ITEM_CHLOROPHYTE_BAR, 2, 4},
-            {ITEM_SOUL_OF_FRIGHT, 3, 6},
-            {ITEM_SOUL_OF_MIGHT, 3, 6},
-            {ITEM_SOUL_OF_SIGHT, 3, 6},
-            {ITEM_LIFE_FRUIT, 1, 1},
-            {ITEM_GREATER_MANA_POTION, 3, 6}
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1},
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1}
         },
         {
-            {ITEM_ECTOPLASM, 2, 4},
-            {ITEM_SPECTRE_BAR, 2, 4},
-            {ITEM_SHROOMITE_BAR, 2, 4},
-            {ITEM_TEMPLE_KEY, 1, 1},
-            {ITEM_CHLOROPHYTE_BAR, 3, 6},
-            {ITEM_LIHZAHRD_POWER_CELL, 1, 2},
-            {ITEM_LIFE_FRUIT, 1, 1},
-            {ITEM_GREATER_HEALING_POTION, 4, 8}
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1},
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1}
         },
         {
-            {ITEM_LUNAR_BAR, 2, 5},
-            {ITEM_CELESTIAL_SIGIL, 1, 1},
-            {ITEM_ECTOPLASM, 3, 6},
-            {ITEM_BEETLE_HUSK, 2, 4},
-            {ITEM_SHROOMITE_BAR, 2, 5},
-            {ITEM_CHLOROPHYTE_BAR, 4, 8},
-            {ITEM_LIFE_FRUIT, 1, 1},
-            {ITEM_GREATER_HEALING_POTION, 5, 10}
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1},
+            {ITEM_DEMON_WINGS, 1, 1},
+            {ITEM_ANGEL_WINGS, 1, 1},
+            {ITEM_MAGIC_MIRROR, 1, 1},
+            {ITEM_HOOK, 1, 1}
         }
+    };
+
+#define PROGRESS_MATERIAL_POOL_SIZE 4
+#define PROGRESS_POTION_POOL_SIZE 2
+
+/* Every elite rank also receives a progression-appropriate material. These
+ * are all vanilla items and are deliberately kept separate from the rare
+ * utility pool above so normal and legendary rewards cannot roll a mirror or
+ * accessory when a material was requested. */
+static const vanilla_reward_entry_t
+    g_progress_material_pools[5][PROGRESS_MATERIAL_POOL_SIZE] = {
+        {
+            {ITEM_FALLEN_STAR, 3, 6}, {ITEM_LIFE_CRYSTAL, 1, 1},
+            {ITEM_MANA_CRYSTAL, 1, 1}, {ITEM_GEL, 8, 16}
+        },
+        {
+            {ITEM_COBALT_BAR, 2, 4}, {ITEM_MYTHRIL_BAR, 2, 4},
+            {ITEM_ADAMANTITE_BAR, 2, 4}, {ITEM_SOUL_OF_NIGHT, 3, 6}
+        },
+        {
+            {ITEM_HALLOWED_BAR, 2, 4}, {ITEM_CHLOROPHYTE_ORE, 8, 16},
+            {ITEM_CHLOROPHYTE_BAR, 2, 4}, {ITEM_SOUL_OF_SIGHT, 3, 6}
+        },
+        {
+            {ITEM_ECTOPLASM, 2, 4}, {ITEM_SPECTRE_BAR, 2, 4},
+            {ITEM_SHROOMITE_BAR, 2, 4}, {ITEM_LIHZAHRD_POWER_CELL, 1, 2}
+        },
+        {
+            {ITEM_LUNAR_BAR, 2, 5}, {ITEM_BEETLE_HUSK, 2, 4},
+            {ITEM_ECTOPLASM, 3, 6}, {ITEM_CHLOROPHYTE_BAR, 4, 8}
+        }
+    };
+
+static const vanilla_reward_entry_t
+    g_progress_potion_pools[5][PROGRESS_POTION_POOL_SIZE] = {
+        {{ITEM_HEALING_POTION, 2, 4}, {ITEM_GREATER_HEALING_POTION, 1, 2}},
+        {{ITEM_GREATER_HEALING_POTION, 2, 4}, {ITEM_GREATER_MANA_POTION, 2, 4}},
+        {{ITEM_GREATER_HEALING_POTION, 3, 6}, {ITEM_GREATER_MANA_POTION, 3, 6}},
+        {{ITEM_GREATER_HEALING_POTION, 4, 8}, {ITEM_GREATER_MANA_POTION, 4, 8}},
+        {{ITEM_GREATER_HEALING_POTION, 5, 10}, {ITEM_GREATER_MANA_POTION, 5, 10}}
     };
 
 #define PRE_HARDMODE_ENVIRONMENT_CRATE_POOL_SIZE 9
@@ -348,6 +389,7 @@ static patch_handle_t g_field_width = NULL;
 static patch_handle_t g_field_height = NULL;
 static patch_handle_t g_field_scale = NULL;
 static patch_handle_t g_field_value = NULL;
+static patch_handle_t g_field_color = NULL;
 static patch_handle_t g_field_friendly = NULL;
 static patch_handle_t g_field_town_npc = NULL;
 static patch_handle_t g_field_boss = NULL;
@@ -382,6 +424,18 @@ static bool g_progress_fields_logged = false;
 #define LEGENDARY_ENRAGE_DAMAGE_MULTIPLIER 1.25f
 #define LEGENDARY_TELEPORT_DISTANCE 480.0f
 #define LEGENDARY_TELEPORT_OFFSET 96.0f
+
+/* Reward components are tracked independently so a temporary Item.NewItem
+ * failure can retry only the missing part without duplicating earlier drops. */
+#define REWARD_COMPONENT_PRIMARY 0x01u
+#define REWARD_COMPONENT_SECONDARY 0x02u
+
+typedef struct elite_color_t {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t a;
+} elite_color_t;
 
 static int random_percent(void) {
     return rand() % 100;
@@ -488,6 +542,26 @@ static bool write_bool(patch_handle_t field, patch_handle_t instance, bool value
     return set_field_value(field, instance, &value);
 }
 
+static bool write_elite_color(patch_handle_t instance, elite_rank_t rank) {
+    if (!instance || !g_field_color || !patchlib_is_valid(g_field_color) ||
+        patchlib_field_get_size(g_field_color) != sizeof(elite_color_t)) {
+        return false;
+    }
+
+    elite_color_t color = {255, 255, 255, 255};
+    if (rank == ELITE_RARE) color = (elite_color_t){110, 170, 255, 255};
+    if (rank == ELITE_LEGENDARY) color = (elite_color_t){225, 120, 255, 255};
+
+#if defined(__ANDROID__)
+    void *raw = patchlib_field_get_pointer(g_field_color, instance);
+    if (raw) {
+        memcpy(raw, &color, sizeof(color));
+        return true;
+    }
+#endif
+    return set_field_value(g_field_color, instance, &color);
+}
+
 typedef struct elite_vector2_t {
     float x;
     float y;
@@ -564,6 +638,8 @@ static void clear_elite_instance(void *instance) {
     if (slot >= PROCESSED_INSTANCE_LIMIT) return;
     g_elite_active[slot] = false;
     g_elite_rewarded[slot] = false;
+    g_elite_reward_mask[slot] = 0;
+    g_elite_spawn_announced[slot] = false;
     g_elite_ai_ticks[slot] = 0;
     g_elite_base_damage[slot] = 0;
     g_elite_enraged[slot] = false;
@@ -581,6 +657,8 @@ static void set_elite_state(size_t slot, elite_rank_t rank,
     g_elite_base_damage[slot] = base_damage;
     g_elite_enraged[slot] = false;
     g_elite_rewarded[slot] = false;
+    g_elite_reward_mask[slot] = 0;
+    g_elite_spawn_announced[slot] = false;
     g_elite_affix_masks[slot] = affix_mask;
     g_elite_split_triggered[slot] = false;
 }
@@ -631,6 +709,29 @@ static bool already_rewarded(void *instance) {
 static void remember_rewarded(void *instance) {
     size_t slot = elite_instance_index(instance);
     if (slot < PROCESSED_INSTANCE_LIMIT) g_elite_rewarded[slot] = true;
+}
+
+static bool reward_component_done(void *instance, uint32_t component) {
+    size_t slot = elite_instance_index(instance);
+    return slot < PROCESSED_INSTANCE_LIMIT &&
+           (g_elite_reward_mask[slot] & component) != 0;
+}
+
+static void remember_reward_component(void *instance, uint32_t component) {
+    size_t slot = elite_instance_index(instance);
+    if (slot < PROCESSED_INSTANCE_LIMIT) {
+        g_elite_reward_mask[slot] |= component;
+    }
+}
+
+static void complete_reward_if_ready(void *instance) {
+    size_t slot = elite_instance_index(instance);
+    if (slot >= PROCESSED_INSTANCE_LIMIT) return;
+    if ((g_elite_reward_mask[slot] &
+         (REWARD_COMPONENT_PRIMARY | REWARD_COMPONENT_SECONDARY)) ==
+        (REWARD_COMPONENT_PRIMARY | REWARD_COMPONENT_SECONDARY)) {
+        remember_rewarded(instance);
+    }
 }
 
 static elite_world_mode_t profile_mode_for_game_mode(int game_mode) {
@@ -906,6 +1007,41 @@ static bool select_rare_progress_reward(elite_progress_t progress,
     return *item_type > 0 && *item_stack > 0;
 }
 
+static bool select_progress_pool_reward(
+    const vanilla_reward_entry_t pool[][PROGRESS_MATERIAL_POOL_SIZE],
+    elite_progress_t progress, int32_t *item_type, int32_t *item_stack) {
+    if (!item_type || !item_stack) return false;
+    if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
+        progress = PROGRESS_PRE_HARDMODE;
+    }
+    const vanilla_reward_entry_t *entry =
+        &pool[progress][(size_t)(rand() % PROGRESS_MATERIAL_POOL_SIZE)];
+    *item_type = entry->item_type;
+    *item_stack = random_range_i32(entry->min_stack, entry->max_stack);
+    return *item_type > 0 && *item_stack > 0;
+}
+
+static bool select_progress_material_reward(elite_progress_t progress,
+                                             int32_t *item_type,
+                                             int32_t *item_stack) {
+    return select_progress_pool_reward(g_progress_material_pools, progress,
+                                        item_type, item_stack);
+}
+
+static bool select_progress_potion_reward(elite_progress_t progress,
+                                          int32_t *item_type,
+                                          int32_t *item_stack) {
+    if (!item_type || !item_stack) return false;
+    if (progress < PROGRESS_PRE_HARDMODE || progress > PROGRESS_ENDGAME) {
+        progress = PROGRESS_PRE_HARDMODE;
+    }
+    const vanilla_reward_entry_t *entry =
+        &g_progress_potion_pools[progress][(size_t)(rand() % PROGRESS_POTION_POOL_SIZE)];
+    *item_type = entry->item_type;
+    *item_stack = random_range_i32(entry->min_stack, entry->max_stack);
+    return *item_type > 0 && *item_stack > 0;
+}
+
 static int32_t legendary_environment_crate(elite_progress_t progress) {
     if (progress == PROGRESS_PRE_HARDMODE) {
         size_t index = (size_t)(rand() %
@@ -1142,6 +1278,11 @@ static void apply_elite_profile(patch_handle_t instance) {
                                scale * profile.scale_multiplier);
     }
 
+    /* Tint the sprite itself when the current build exposes NPC.color. This
+     * is a safe appearance layer that does not replace the vanilla draw path:
+     * rare elites become blue-tinted and legendary elites purple-tinted. */
+    changed |= write_elite_color(instance, profile.rank);
+
     /* Vanilla NPC.value controls the normal coin drop. Keep the reward
      * entirely vanilla while making higher elite ranks worth more. */
     if (valid_field(g_field_value, PATCH_FLOAT)) {
@@ -1166,10 +1307,12 @@ static void apply_elite_profile(patch_handle_t instance) {
     }
 }
 
-/* NPCLoot runs after Terraria has processed the original loot. Rare elites
- * add one random current-progress vanilla item; legendary elites always add
- * exactly one crate: a 70% common crate or a 30% environment crate. The
- * instance guard prevents a repeated NPCLoot call from duplicating rewards. */
+/* NPCLoot runs after Terraria has processed the original loot. Normal elites
+ * add a small potion bundle and a progression material; rare elites add a
+ * progression material plus one useful vanilla item; legendary elites add a
+ * 70% common/30% environment crate plus a progression material. NPC.value was
+ * already scaled at SetDefaults, so all three ranks also drop large amounts
+ * of vanilla coins. Each component is tracked independently for safe retry. */
 static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
                              const patch_method_signature_t *sig_info) {
     (void)args;
@@ -1180,7 +1323,6 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
     }
 
     elite_rank_t rank = elite_rank_for_instance(instance);
-    if (rank != ELITE_RARE && rank != ELITE_LEGENDARY) return;
 
     if (!reward_drop_allowed()) {
         /* Clients never create the item, but still remember the completed
@@ -1190,49 +1332,107 @@ static void npc_loot_postfix(patch_handle_t instance, void **args, void *result,
     }
 
     elite_progress_t progress = current_progress();
-    if (rank == ELITE_RARE) {
-        int32_t item_type = 0;
-        int32_t item_stack = 0;
-        if (select_rare_progress_reward(progress, &item_type, &item_stack) &&
-            spawn_vanilla_reward(instance, item_type, item_stack)) {
-            remember_rewarded(instance);
-            ++g_rare_reward_count;
-            ELITE_LOG(
-                MOD_LOG_LEVEL_INFO,
-                "Rare progress reward dropped: item=%d stack=%d progress=%s total=%lu",
-                (int)item_type, (int)item_stack, progress_name(progress),
-                g_rare_reward_count);
-        } else {
-            ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                      "Rare progress reward could not be spawned: progress=%s",
-                      progress_name(progress));
+    if (rank == ELITE_NORMAL) {
+        if (!reward_component_done(instance, REWARD_COMPONENT_PRIMARY)) {
+            int32_t item_type = 0;
+            int32_t item_stack = 0;
+            if (select_progress_potion_reward(progress, &item_type,
+                                              &item_stack) &&
+                spawn_vanilla_reward(instance, item_type, item_stack)) {
+                remember_reward_component(instance, REWARD_COMPONENT_PRIMARY);
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Normal elite potion reward dropped: item=%d stack=%d progress=%s",
+                          (int)item_type, (int)item_stack,
+                          progress_name(progress));
+            }
         }
+        if (!reward_component_done(instance, REWARD_COMPONENT_SECONDARY)) {
+            int32_t item_type = 0;
+            int32_t item_stack = 0;
+            if (select_progress_material_reward(progress, &item_type,
+                                                &item_stack) &&
+                spawn_vanilla_reward(instance, item_type, item_stack)) {
+                remember_reward_component(instance, REWARD_COMPONENT_SECONDARY);
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Normal elite material reward dropped: item=%d stack=%d progress=%s",
+                          (int)item_type, (int)item_stack,
+                          progress_name(progress));
+            }
+        }
+        complete_reward_if_ready(instance);
         return;
     }
 
-    int32_t item_type = 0;
-    const char *crate_kind = NULL;
-    int roll = random_percent();
-    if (roll < LEGENDARY_COMMON_CRATE_CHANCE_PERCENT) {
-        item_type = legendary_common_crate(progress);
-        crate_kind = progress == PROGRESS_PRE_HARDMODE ? "golden" : "titanium";
-    } else {
-        item_type = current_environment_crate(progress, target_player_index(instance));
-        crate_kind = "environment";
+    if (rank == ELITE_RARE) {
+        if (!reward_component_done(instance, REWARD_COMPONENT_PRIMARY)) {
+            int32_t item_type = 0;
+            int32_t item_stack = 0;
+            if (select_progress_material_reward(progress, &item_type,
+                                                &item_stack) &&
+                spawn_vanilla_reward(instance, item_type, item_stack)) {
+                remember_reward_component(instance, REWARD_COMPONENT_PRIMARY);
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Rare elite material reward dropped: item=%d stack=%d progress=%s",
+                          (int)item_type, (int)item_stack,
+                          progress_name(progress));
+            }
+        }
+        if (!reward_component_done(instance, REWARD_COMPONENT_SECONDARY)) {
+            int32_t item_type = 0;
+            int32_t item_stack = 0;
+            if (select_rare_progress_reward(progress, &item_type,
+                                             &item_stack) &&
+                spawn_vanilla_reward(instance, item_type, item_stack)) {
+                remember_reward_component(instance, REWARD_COMPONENT_SECONDARY);
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Rare elite utility reward dropped: item=%d stack=%d progress=%s",
+                          (int)item_type, (int)item_stack,
+                          progress_name(progress));
+            }
+        }
+        complete_reward_if_ready(instance);
+        return;
     }
-    if (spawn_vanilla_reward(instance, item_type, 1)) {
-        remember_rewarded(instance);
-        ++g_legendary_reward_count;
-        ELITE_LOG(
-            MOD_LOG_LEVEL_INFO,
-            "Legendary crate dropped: kind=%s item=%d distribution=%d%%/%d%% progress=%s total=%lu",
-            crate_kind, (int)item_type, LEGENDARY_COMMON_CRATE_CHANCE_PERCENT,
-            LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT, progress_name(progress),
-            g_legendary_reward_count);
-    } else {
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Legendary crate could not be spawned: kind=%s item=%d progress=%s",
-                  crate_kind, (int)item_type, progress_name(progress));
+
+    if (rank == ELITE_LEGENDARY) {
+        if (!reward_component_done(instance, REWARD_COMPONENT_PRIMARY)) {
+            int32_t item_type = 0;
+            const char *crate_kind = NULL;
+            int roll = random_percent();
+            if (roll < LEGENDARY_COMMON_CRATE_CHANCE_PERCENT) {
+                item_type = legendary_common_crate(progress);
+                crate_kind = progress == PROGRESS_PRE_HARDMODE ? "golden" : "titanium";
+            } else {
+                item_type = current_environment_crate(
+                    progress, target_player_index(instance));
+                crate_kind = "environment";
+            }
+            if (spawn_vanilla_reward(instance, item_type, 1)) {
+                remember_reward_component(instance, REWARD_COMPONENT_PRIMARY);
+                ELITE_LOG(
+                    MOD_LOG_LEVEL_INFO,
+                    "Legendary crate dropped: kind=%s item=%d distribution=%d%%/%d%% progress=%s",
+                    crate_kind, (int)item_type,
+                    LEGENDARY_COMMON_CRATE_CHANCE_PERCENT,
+                    LEGENDARY_ENVIRONMENT_CRATE_CHANCE_PERCENT,
+                    progress_name(progress));
+            }
+        }
+
+        if (!reward_component_done(instance, REWARD_COMPONENT_SECONDARY)) {
+            int32_t item_type = 0;
+            int32_t item_stack = 0;
+            if (select_progress_material_reward(progress, &item_type,
+                                                &item_stack) &&
+                spawn_vanilla_reward(instance, item_type, item_stack)) {
+                remember_reward_component(instance, REWARD_COMPONENT_SECONDARY);
+                ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                          "Legendary elite material reward dropped: item=%d stack=%d progress=%s",
+                          (int)item_type, (int)item_stack,
+                          progress_name(progress));
+            }
+        }
+        complete_reward_if_ready(instance);
     }
 }
 
@@ -1320,6 +1520,7 @@ static void cache_npc_fields(patch_handle_t npc) {
     g_field_height = patchlib_type_get_field(npc, "height");
     g_field_scale = patchlib_type_get_field(npc, "scale");
     g_field_value = patchlib_type_get_field(npc, "value");
+    g_field_color = patchlib_type_get_field(npc, "color");
     g_field_friendly = patchlib_type_get_field(npc, "friendly");
     g_field_town_npc = patchlib_type_get_field(npc, "townNPC");
     g_field_boss = patchlib_type_get_field(npc, "boss");
@@ -1700,6 +1901,26 @@ static void discover_mouse_text_api(patch_handle_t main_type) {
     }
 }
 
+/* Main.NewText(string) is used only for the one-time spawn notice. Keeping
+ * this as a dynamically resolved optional API means the rest of the mod still
+ * works on builds that omit that overload. */
+static void discover_new_text_api(patch_handle_t main_type) {
+    patch_handle_t method = patchlib_type_get_method_by_param_count(
+        main_type, "NewText", 1);
+    if (!method || !patchlib_is_valid(method)) return;
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return;
+    bool supported = !sig.is_instance && sig.return_type == PATCH_VOID &&
+                     tefstd_vector_size(&sig.arg_types) == 1;
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Main.NewText API: found=%d static=%d return=%d params=%d",
+              supported ? 1 : 0, sig.is_instance ? 0 : 1,
+              (int)sig.return_type, (int)tefstd_vector_size(&sig.arg_types));
+    patchlib_method_signature_free(&sig);
+    if (supported) g_main_new_text_method = method;
+}
+
 static void request_npc_net_update(patch_handle_t instance) {
     if (!instance) return;
     (void)write_bool(g_field_net_update, instance, true);
@@ -1709,6 +1930,37 @@ static bool multiplayer_client(void) {
     int32_t net_mode = 0;
     (void)read_i32(g_main_net_mode_field, NULL, &net_mode);
     return net_mode == 1;
+}
+
+static void announce_elite_spawn(void *instance, size_t index) {
+    if (!instance || index >= PROCESSED_INSTANCE_LIMIT ||
+        g_elite_spawn_announced[index] || !g_main_new_text_method ||
+        !patchlib_is_valid(g_main_new_text_method)) {
+        return;
+    }
+
+    int32_t net_mode = 0;
+    (void)read_i32(g_main_net_mode_field, NULL, &net_mode);
+    /* A dedicated server has no local screen. Single-player and multiplayer
+     * clients display the notice once each, while server-side loot remains
+     * authoritative. */
+    if (net_mode == 2) return;
+
+    const char *message = "精英怪出现了！";
+    if (g_elite_ranks[index] == ELITE_RARE) message = "稀有精英出现了！";
+    if (g_elite_ranks[index] == ELITE_LEGENDARY) {
+        message = "传奇精英出现了！";
+    }
+
+    patch_handle_t text = patchlib_string_create(message);
+    if (!text || !patchlib_is_valid(text)) return;
+    void *args[1] = {&text};
+    if (patchlib_method_invoke_args(g_main_new_text_method, PATCH_NULL, NULL,
+                                    args)) {
+        g_elite_spawn_announced[index] = true;
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "Elite spawn notice shown: rank=%d", (int)g_elite_ranks[index]);
+    }
 }
 
 static uint32_t legendary_action_interval(elite_behavior_t behavior,
@@ -2025,15 +2277,20 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     size_t index = elite_instance_index(instance);
     if (index >= PROCESSED_INSTANCE_LIMIT) return;
     ++g_elite_ai_ticks[index];
+    announce_elite_spawn(instance, index);
 
     int32_t player = target_player_index(instance);
     if (player >= 0) (void)write_i32(g_field_target, instance, player);
 
     elite_rank_t rank = g_elite_ranks[index];
-    apply_affix_effects(instance, index);
+    if (!multiplayer_client()) apply_affix_effects(instance, index);
     if (rank != ELITE_LEGENDARY) {
-        if (rank == ELITE_RARE &&
-            g_elite_ai_ticks[index] % 150u == 0u) {
+        /* Normal elites get a readable, low-frequency burst. Rare elites
+         * burst more often, so both ranks have a real combat identity instead
+         * of relying on health/damage multipliers alone. */
+        uint32_t skill_interval = rank == ELITE_RARE ? 150u : 240u;
+        if (!multiplayer_client() &&
+            g_elite_ai_ticks[index] % skill_interval == 0u) {
             apply_rank_dash(instance, rank);
         }
         return;
@@ -2222,6 +2479,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     }
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
+        discover_new_text_api(main_type);
         discover_mouse_text_api(main_type);
         if (npc && patchlib_is_valid(npc)) {
             patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
@@ -2263,7 +2521,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_loot_hook_count = 0;
     g_main_game_mode_getter = NULL;
     g_main_zenith_world_field = NULL;
+    g_main_new_text_method = NULL;
     g_item_new_item_method = NULL;
+    g_field_color = NULL;
     g_field_who_am_i = NULL;
     g_field_immortal = NULL;
     g_field_dont_take_damage = NULL;
@@ -2272,20 +2532,20 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     memset(g_elite_instances, 0, sizeof(g_elite_instances));
     memset(g_elite_active, 0, sizeof(g_elite_active));
     memset(g_elite_rewarded, 0, sizeof(g_elite_rewarded));
+    memset(g_elite_reward_mask, 0, sizeof(g_elite_reward_mask));
+    memset(g_elite_spawn_announced, 0, sizeof(g_elite_spawn_announced));
     memset(g_elite_affix_masks, 0, sizeof(g_elite_affix_masks));
     memset(g_elite_split_triggered, 0, sizeof(g_elite_split_triggered));
     g_setdefaults_calls = 0;
     g_elite_count = 0;
-    g_rare_reward_count = 0;
-    g_legendary_reward_count = 0;
     ELITE_LOG(MOD_LOG_LEVEL_INFO, "Unloaded");
 }
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090107,
+    .version_code = 2026090108,
     .api_version = 1,
-    .version = "1.3.2"
+    .version = "1.4.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
