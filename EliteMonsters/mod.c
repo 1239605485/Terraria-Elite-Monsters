@@ -514,6 +514,27 @@ static patch_handle_t g_player_zone_spider_field = NULL;
 static patch_handle_t g_player_zone_meteor_field = NULL;
 static patch_handle_t g_player_zone_temple_field = NULL;
 static patch_handle_t g_player_zone_ice_field = NULL;
+enum player_zone_getter_index {
+    ZONE_GETTER_DUNGEON,
+    ZONE_GETTER_CORRUPT,
+    ZONE_GETTER_CRIMSON,
+    ZONE_GETTER_JUNGLE,
+    ZONE_GETTER_SNOW,
+    ZONE_GETTER_DESERT,
+    ZONE_GETTER_BEACH,
+    ZONE_GETTER_UNDERWORLD,
+    ZONE_GETTER_HALLOW,
+    ZONE_GETTER_SKY,
+    ZONE_GETTER_FOREST,
+    ZONE_GETTER_ROCK,
+    ZONE_GETTER_DIRT,
+    ZONE_GETTER_GLOWSHROOM,
+    ZONE_GETTER_SPIDER,
+    ZONE_GETTER_METEOR,
+    ZONE_GETTER_TEMPLE,
+    ZONE_GETTER_COUNT
+};
+static patch_handle_t g_player_zone_getters[ZONE_GETTER_COUNT];
 static patch_handle_t g_player_velocity_field = NULL;
 static patch_handle_t g_player_stat_life_field = NULL;
 static patch_handle_t g_player_stat_life_max_field = NULL;
@@ -1012,12 +1033,71 @@ static bool read_player_state(int32_t player_index, elite_vector2_t *position,
     return true;
 }
 
+static patch_handle_t zone_getter_for_field(patch_handle_t field) {
+    if (field == g_player_zone_dungeon_field) {
+        return g_player_zone_getters[ZONE_GETTER_DUNGEON];
+    }
+    if (field == g_player_zone_corrupt_field) {
+        return g_player_zone_getters[ZONE_GETTER_CORRUPT];
+    }
+    if (field == g_player_zone_crimson_field) {
+        return g_player_zone_getters[ZONE_GETTER_CRIMSON];
+    }
+    if (field == g_player_zone_jungle_field) {
+        return g_player_zone_getters[ZONE_GETTER_JUNGLE];
+    }
+    if (field == g_player_zone_snow_field) {
+        return g_player_zone_getters[ZONE_GETTER_SNOW];
+    }
+    if (field == g_player_zone_desert_field) {
+        return g_player_zone_getters[ZONE_GETTER_DESERT];
+    }
+    if (field == g_player_zone_beach_field) {
+        return g_player_zone_getters[ZONE_GETTER_BEACH];
+    }
+    if (field == g_player_zone_underworld_field) {
+        return g_player_zone_getters[ZONE_GETTER_UNDERWORLD];
+    }
+    if (field == g_player_zone_hallow_field) {
+        return g_player_zone_getters[ZONE_GETTER_HALLOW];
+    }
+    if (field == g_player_zone_sky_field) {
+        return g_player_zone_getters[ZONE_GETTER_SKY];
+    }
+    if (field == g_player_zone_forest_field) {
+        return g_player_zone_getters[ZONE_GETTER_FOREST];
+    }
+    if (field == g_player_zone_rock_layer_field) {
+        return g_player_zone_getters[ZONE_GETTER_ROCK];
+    }
+    if (field == g_player_zone_dirt_layer_field) {
+        return g_player_zone_getters[ZONE_GETTER_DIRT];
+    }
+    if (field == g_player_zone_glowshroom_field) {
+        return g_player_zone_getters[ZONE_GETTER_GLOWSHROOM];
+    }
+    if (field == g_player_zone_spider_field) {
+        return g_player_zone_getters[ZONE_GETTER_SPIDER];
+    }
+    if (field == g_player_zone_meteor_field) {
+        return g_player_zone_getters[ZONE_GETTER_METEOR];
+    }
+    if (field == g_player_zone_temple_field) {
+        return g_player_zone_getters[ZONE_GETTER_TEMPLE];
+    }
+    return NULL;
+}
+
 static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
-    if (!valid_field(field, PATCH_BOOL)) return false;
     patch_handle_t player = NULL;
     bool value = false;
-    return get_player_instance(player_index, &player) &&
-           read_bool(field, player, &value) && value;
+    if (!get_player_instance(player_index, &player)) return false;
+    if (valid_field(field, PATCH_BOOL) &&
+        read_bool(field, player, &value)) return value;
+
+    patch_handle_t getter = zone_getter_for_field(field);
+    if (!getter || !patchlib_is_valid(getter)) return false;
+    return patchlib_method_invoke_args(getter, player, &value, NULL) && value;
 }
 
 static uint32_t hash_bytes(uint32_t hash, const unsigned char *bytes,
@@ -1158,6 +1238,17 @@ static void advance_world_rule_clock(void) {
     uint64_t update_count = 0;
     bool has_update_count = read_u64(g_main_update_count_field, NULL,
                                      &update_count);
+    if (has_update_count && g_last_game_update_count != UINT64_MAX &&
+        update_count < g_last_game_update_count) {
+        /* Main.GameUpdateCount starts over when a world is left/reloaded.
+         * Keep the world's rule roll, but make the next active terrain emit
+         * its entry notice again. */
+        g_last_reported_terrain = TERRAIN_RULE_NONE;
+        g_terrain_report_cooldown = 0;
+        g_tide_cooldown = 0;
+        ELITE_LOG(MOD_LOG_LEVEL_INFO,
+                  "World session restarted; terrain notice state reset");
+    }
     if (has_update_count && update_count == g_last_game_update_count) return;
     if (!has_update_count) {
         clock_t now = clock();
@@ -2221,6 +2312,28 @@ static void setdefaults_postfix(patch_handle_t instance, void **args, void *resu
     apply_elite_profile(instance);
 }
 
+static patch_handle_t discover_bool_getter(patch_handle_t type,
+                                           const char *name) {
+    patch_handle_t getter = NULL;
+    patch_handle_t property = patchlib_type_get_property(type, name);
+    if (property && patchlib_is_valid(property)) {
+        getter = patchlib_property_get_get_method(property);
+    }
+    if (!getter || !patchlib_is_valid(getter)) {
+        char getter_name[96];
+        (void)snprintf(getter_name, sizeof(getter_name), "get_%s", name);
+        getter = patchlib_type_get_method(type, getter_name);
+    }
+    if (!getter || !patchlib_is_valid(getter)) return NULL;
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(getter, &sig)) return NULL;
+    bool supported = sig.is_instance && sig.return_type == PATCH_BOOL &&
+                     tefstd_vector_size(&sig.arg_types) == 0;
+    patchlib_method_signature_free(&sig);
+    return supported ? getter : NULL;
+}
+
 static void cache_npc_fields(patch_handle_t npc) {
     g_field_type = patchlib_type_get_field(npc, "type");
     g_field_position = patchlib_type_get_field(npc, "position");
@@ -2322,6 +2435,40 @@ static void cache_npc_fields(patch_handle_t npc) {
         g_player_zone_temple_field = patchlib_type_get_field(
             player_type, "ZoneLihzhardian");
         g_player_zone_ice_field = patchlib_type_get_field(player_type, "ZoneSnow");
+        g_player_zone_getters[ZONE_GETTER_DUNGEON] =
+            discover_bool_getter(player_type, "ZoneDungeon");
+        g_player_zone_getters[ZONE_GETTER_CORRUPT] =
+            discover_bool_getter(player_type, "ZoneCorrupt");
+        g_player_zone_getters[ZONE_GETTER_CRIMSON] =
+            discover_bool_getter(player_type, "ZoneCrimson");
+        g_player_zone_getters[ZONE_GETTER_JUNGLE] =
+            discover_bool_getter(player_type, "ZoneJungle");
+        g_player_zone_getters[ZONE_GETTER_SNOW] =
+            discover_bool_getter(player_type, "ZoneSnow");
+        g_player_zone_getters[ZONE_GETTER_DESERT] =
+            discover_bool_getter(player_type, "ZoneDesert");
+        g_player_zone_getters[ZONE_GETTER_BEACH] =
+            discover_bool_getter(player_type, "ZoneBeach");
+        g_player_zone_getters[ZONE_GETTER_UNDERWORLD] =
+            discover_bool_getter(player_type, "ZoneUnderworldHeight");
+        g_player_zone_getters[ZONE_GETTER_HALLOW] =
+            discover_bool_getter(player_type, "ZoneHallow");
+        g_player_zone_getters[ZONE_GETTER_SKY] =
+            discover_bool_getter(player_type, "ZoneSkyHeight");
+        g_player_zone_getters[ZONE_GETTER_FOREST] =
+            discover_bool_getter(player_type, "ZoneForest");
+        g_player_zone_getters[ZONE_GETTER_ROCK] =
+            discover_bool_getter(player_type, "ZoneRockLayerHeight");
+        g_player_zone_getters[ZONE_GETTER_DIRT] =
+            discover_bool_getter(player_type, "ZoneDirtLayerHeight");
+        g_player_zone_getters[ZONE_GETTER_GLOWSHROOM] =
+            discover_bool_getter(player_type, "ZoneGlowshroom");
+        g_player_zone_getters[ZONE_GETTER_SPIDER] =
+            discover_bool_getter(player_type, "ZoneSpider");
+        g_player_zone_getters[ZONE_GETTER_METEOR] =
+            discover_bool_getter(player_type, "ZoneMeteor");
+        g_player_zone_getters[ZONE_GETTER_TEMPLE] =
+            discover_bool_getter(player_type, "ZoneLihzhardian");
         g_player_velocity_field = patchlib_type_get_field(player_type, "velocity");
         g_player_stat_life_field = patchlib_type_get_field(player_type, "statLife");
         g_player_stat_life_max_field = patchlib_type_get_field(player_type,
@@ -3340,6 +3487,7 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     g_main_new_text_arg_count = 0;
     g_main_new_text_color_type = PATCH_UINT8;
     g_main_new_text_warning_logged = false;
+    memset(g_player_zone_getters, 0, sizeof(g_player_zone_getters));
     g_item_new_item_method = NULL;
     g_npc_new_npc_method = NULL;
     g_npc_new_npc_arg_count = 0;
@@ -3371,9 +3519,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090107,
+    .version_code = 2026090108,
     .api_version = 1,
-    .version = "1.3.2"
+    .version = "1.3.3"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
