@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.1（Android AI 安全修复测试版）
+# EliteMonsters 1.3.2（Android AI Hook 隔离测试版）
 
 ## 1.3.0 更新
 

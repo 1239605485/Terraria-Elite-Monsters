@@ -6,8 +6,17 @@
 
 static patch_hook_id_t g_ai_hook = PATCH_HOOK_INVALID_ID;
 
+/* Diagnostic gate: keep the NPC.AI hook installed, but start with an empty
+ * callback on Android. If this remains stable, the hook ABI is valid and the
+ * remaining fault is inside the field access/elite transformation path. */
+#define ELITEMONSTERS_ENABLE_AI_BEHAVIOR 0
+
 static void ai_postfix(patch_handle_t instance, void** args, void* result,
                        const patch_method_signature_t* sig) {
+#if !ELITEMONSTERS_ENABLE_AI_BEHAVIOR
+    (void)instance; (void)args; (void)result; (void)sig;
+    return;
+#else
     (void)args; (void)result; (void)sig;
     if (!instance) return;
     elite_core_try_apply(instance);
@@ -63,6 +72,7 @@ static void ai_postfix(patch_handle_t instance, void** args, void* result,
     (void)elite_core_write_vector2(ctx->npc_position, instance, nx, ny);
     (void)elite_core_write_vector2(ctx->npc_velocity, instance, vx, vy);
     (void)elite_core_write_bool(ctx->npc_net_update, instance, true);
+#endif
 }
 
 void elite_ai_init(void) {
