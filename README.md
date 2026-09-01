@@ -1,4 +1,4 @@
-# EliteMonsters 1.4.0（正式精英生成版）
+# EliteMonsters 1.4.1（Android 稳定核心精英版）
 
 ## 1.3.0 更新
 

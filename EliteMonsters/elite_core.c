@@ -10,8 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern void biome_mutations_on_spawn(void* npc, size_t slot);
-
 static EliteContext g_ctx;
 static EliteState g_states[ELITE_TRACK_LIMIT];
 static void* g_processed_instances[ELITE_TRACK_LIMIT];
@@ -207,7 +205,6 @@ void elite_core_mark(void* instance, elite_rank_t rank, int32_t damage, int32_t 
     g_states[slot].base_defense = defense;
     g_states[slot].ai_ticks = 0;
     g_states[slot].biome = -1;
-    biome_mutations_on_spawn(instance, slot);
 }
 
 elite_rank_t elite_core_rank(void* instance) {
@@ -284,17 +281,6 @@ const char* elite_core_progress_name(elite_progress_t progress) {
     return names[progress];
 }
 
-static int world_mode(void) {
-    int32_t game_mode = 0;
-    bool zenith = false;
-    if (!elite_core_read_i32(g_ctx.main_game_mode, NULL, &game_mode) && g_ctx.main_game_mode_getter) {
-        patchlib_method_invoke_args(g_ctx.main_game_mode_getter, NULL, &game_mode, NULL);
-    }
-    if (game_mode < 0 || game_mode > 3) game_mode = 0;
-    (void)elite_core_read_bool(g_ctx.main_zenith_world, NULL, &zenith);
-    return zenith ? 3 : (int)game_mode;
-}
-
 static int random_percent(void) { return rand() % 100; }
 
 static void apply_profile(void* npc) {
@@ -303,53 +289,34 @@ static void apply_profile(void* npc) {
     int32_t type = 0, life_max = 0, life = 0, damage = 0, defense = 0;
     bool value = false;
     if (!elite_core_read_i32(g_ctx.npc_type, npc, &type) ||
-        !elite_core_read_i32(g_ctx.npc_life_max, npc, &life_max) || life_max <= 0) return;
+        !elite_core_read_i32(g_ctx.npc_life, npc, &life) || life <= 0 ||
+        !elite_core_read_i32(g_ctx.npc_life_max, npc, &life_max) || life_max <= 0 ||
+        !elite_core_read_i32(g_ctx.npc_damage, npc, &damage) ||
+        !elite_core_read_i32(g_ctx.npc_defense, npc, &defense)) return;
     if (elite_core_read_bool(g_ctx.npc_friendly, npc, &value) && value) return;
     if (elite_core_read_bool(g_ctx.npc_town, npc, &value) && value) return;
     if (elite_core_read_bool(g_ctx.npc_boss, npc, &value) && value) return;
 
-    static const int chance[] = {20, 30, 40, 50};
-    int mode = world_mode();
-    if (random_percent() >= chance[mode]) return;
-    elite_progress_t progress = progress_internal();
+    /* Stable core profile: deliberately avoid Main.GameMode, world progress,
+     * optional object fields and biome initialization in the first live build.
+     * Those extensions can be added after this path is proven on Android. */
+    if (random_percent() >= 50) return;
     int rank_roll = random_percent();
-    int rank_index = rank_roll < 5 ? 2 : (rank_roll < 30 ? 1 : 0);
-    static const float hp[5][3] = {{1.4f,2.0f,3.0f},{1.7f,2.6f,4.2f},{2.0f,3.4f,5.5f},{2.4f,4.2f,7.0f},{3.0f,5.5f,9.0f}};
-    static const float dmg[5][3] = {{1.15f,1.4f,1.8f},{1.35f,1.8f,2.4f},{1.55f,2.15f,3.0f},{1.8f,2.6f,3.8f},{2.1f,3.2f,4.8f}};
-    static const int def[5][3] = {{4,8,12},{8,15,24},{12,22,36},{18,32,52},{26,45,75}};
-    static const float gold[5][3] = {{10,25,50},{15,40,80},{25,60,130},{40,100,220},{60,150,320}};
-    static const float mode_hp[] = {1.0f,1.15f,1.35f,1.60f};
-    static const float mode_dmg[] = {1.0f,1.10f,1.25f,1.45f};
-    static const int mode_def[] = {0,4,8,12};
-    static const float mode_gold[] = {1.0f,1.5f,2.25f,3.25f};
-    float hp_mult = hp[progress][rank_index] * mode_hp[mode];
-    float dmg_mult = dmg[progress][rank_index] * mode_dmg[mode];
-    int defense_bonus = def[progress][rank_index] + mode_def[mode];
-    if (!elite_core_read_i32(g_ctx.npc_life, npc, &life)) life = life_max;
-    (void)elite_core_read_i32(g_ctx.npc_damage, npc, &damage);
-    (void)elite_core_read_i32(g_ctx.npc_defense, npc, &defense);
+    int rank_index = rank_roll < 10 ? 2 : (rank_roll < 35 ? 1 : 0);
+    static const float hp[] = {2.0f, 3.0f, 4.0f};
+    static const float dmg[] = {1.5f, 2.0f, 3.0f};
+    static const int def[] = {8, 16, 24};
+    float hp_mult = hp[rank_index];
+    float dmg_mult = dmg[rank_index];
+    int defense_bonus = def[rank_index];
     (void)elite_core_write_i32(g_ctx.npc_life_max, npc, scaled(life_max, hp_mult));
     (void)elite_core_write_i32(g_ctx.npc_life, npc, scaled(life, hp_mult));
     (void)elite_core_write_i32(g_ctx.npc_damage, npc, scaled(damage, dmg_mult));
     (void)elite_core_write_i32(g_ctx.npc_defense, npc, defense + defense_bonus);
-    if (elite_core_valid_field(g_ctx.npc_knockback_resist, PATCH_FLOAT)) {
-        (void)elite_core_write_float(g_ctx.npc_knockback_resist, npc,
-                                     rank_index == 2 ? 0.0f : 0.9f);
-    }
-    float scale = 1.0f;
-    if (elite_core_valid_field(g_ctx.npc_scale, PATCH_FLOAT)) {
-        (void)elite_core_read_float(g_ctx.npc_scale, npc, &scale);
-        (void)elite_core_write_float(g_ctx.npc_scale, npc, scale * (1.0f + 0.05f * rank_index));
-    }
-    float value_float = 0.0f;
-    if (elite_core_valid_field(g_ctx.npc_value, PATCH_FLOAT) && elite_core_read_float(g_ctx.npc_value, npc, &value_float)) {
-        (void)elite_core_write_float(g_ctx.npc_value, npc, value_float * gold[progress][rank_index] * mode_gold[mode]);
-    }
     elite_rank_t rank = rank_index == 2 ? ELITE_LEGENDARY : (rank_index == 1 ? ELITE_RARE : ELITE_NORMAL);
     elite_core_mark(npc, rank, scaled(damage, dmg_mult), defense + defense_bonus);
     ++g_elite_count;
-    LOG(MOD_LOG_LEVEL_INFO, "Elite NPC transformed: type=%d rank=%d progress=%s total=%lu",
-        (int)type, (int)rank, elite_core_progress_name(progress), g_elite_count);
+    (void)type;
 }
 
 void elite_core_try_apply(void* instance) {
@@ -540,7 +507,7 @@ void elite_core_init(void) {
     }
     patchlib_free(npc);
     g_initialized = true;
-    LOG(MOD_LOG_LEVEL_INFO, "Elite core initialized; biome rules can use 10 vanilla zone flags");
+    LOG(MOD_LOG_LEVEL_INFO, "Elite core initialized; stable core profile enabled");
 }
 
 static void free_field(patch_handle_t* field) {
