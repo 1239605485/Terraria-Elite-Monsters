@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.3（Android NPC 字段读取测试版）
+# EliteMonsters 1.3.4（Android NPC 属性读取测试版）
 
 ## 1.3.0 更新
 
