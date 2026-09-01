@@ -42,6 +42,17 @@ static bool method_is_instance(patch_handle_t method, patch_type_t return_type,
     return supported;
 }
 
+static bool method_is_static(patch_handle_t method, patch_type_t return_type,
+                             int parameter_count) {
+    if (!valid(method)) return false;
+    patch_method_signature_t signature = {0};
+    if (!patchlib_method_get_signature(method, &signature)) return false;
+    bool supported = !signature.is_instance && signature.return_type == return_type &&
+                     (int)tefstd_vector_size(&signature.arg_types) == parameter_count;
+    patchlib_method_signature_free(&signature);
+    return supported;
+}
+
 bool elite_core_valid_field(patch_handle_t field, patch_type_t type) {
     return valid(field) && patchlib_field_get_type(field) == type;
 }
@@ -349,6 +360,19 @@ static void cache_fields(patch_handle_t npc) {
             patch_handle_t prop = patchlib_type_get_property(main, "GameMode");
             if (prop) g_ctx.main_game_mode_getter = patchlib_property_get_get_method(prop);
             if (prop) patchlib_free(prop);
+        }
+        if (g_ctx.main_game_mode_getter &&
+            !method_is_static(g_ctx.main_game_mode_getter, PATCH_INT32, 0)) {
+            patchlib_free(g_ctx.main_game_mode_getter);
+            g_ctx.main_game_mode_getter = NULL;
+        }
+        if (!g_ctx.main_game_mode && !g_ctx.main_game_mode_getter) {
+            patch_handle_t getter = patchlib_type_get_method(main, "get_GameMode");
+            if (getter && method_is_static(getter, PATCH_INT32, 0)) {
+                g_ctx.main_game_mode_getter = getter;
+            } else if (getter) {
+                patchlib_free(getter);
+            }
         }
         g_ctx.main_zenith_world = patchlib_type_get_field(main, "zenithWorld");
         g_ctx.main_hard_mode = patchlib_type_get_field(main, "hardMode");
