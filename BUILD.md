@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.4（Android NPC 属性读取测试版）
+# EliteMonsters 1.3.6（Android NPC 生命值×2测试版）
 
 This version is authored by `liuxin`. The mod keeps the four difficulty profiles,
 progress-scaled elite NPCs, original rewards and legendary AI. It also adds a

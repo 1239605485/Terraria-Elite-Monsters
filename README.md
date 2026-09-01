@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.4（Android NPC 属性读取测试版）
+# EliteMonsters 1.3.6（Android NPC 生命值×2测试版）
 
 ## 1.3.0 更新
 

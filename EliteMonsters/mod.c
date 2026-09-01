@@ -17,9 +17,9 @@ void (*mod_logger_write)(mod_log_level_t level, const char* tag, const char* fmt
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090205,
+    .version_code = 2026090207,
     .api_version = 1,
-    .version = "1.3.4"
+    .version = "1.3.6"
 };
 
 static void init_mod(kernel_mod_handle_t* handle) {

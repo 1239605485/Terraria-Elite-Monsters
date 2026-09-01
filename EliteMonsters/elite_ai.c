@@ -6,7 +6,7 @@
 
 static patch_hook_id_t g_ai_hook = PATCH_HOOK_INVALID_ID;
 
-/* Diagnostic gate: restore field reads before enabling any writes. */
+/* Diagnostic gate: restore one small life write before enabling full stats. */
 #define ELITEMONSTERS_ENABLE_AI_BEHAVIOR 1
 
 static void ai_postfix(patch_handle_t instance, void** args, void* result,
@@ -16,18 +16,7 @@ static void ai_postfix(patch_handle_t instance, void** args, void* result,
     return;
 #else
     (void)args; (void)result; (void)sig;
-    EliteContext* ctx = elite_core_context();
-    int32_t type = 0, life = 0, life_max = 0, damage = 0, defense = 0;
-    (void)elite_core_read_i32(ctx->npc_type, instance, &type);
-    (void)elite_core_read_i32(ctx->npc_life, instance, &life);
-    (void)elite_core_read_i32(ctx->npc_life_max, instance, &life_max);
-    (void)elite_core_read_i32(ctx->npc_damage, instance, &damage);
-    (void)elite_core_read_i32(ctx->npc_defense, instance, &defense);
-    (void)type;
-    (void)life;
-    (void)life_max;
-    (void)damage;
-    (void)defense;
+    elite_core_probe_life_write(instance);
     return;
 
 #if 0

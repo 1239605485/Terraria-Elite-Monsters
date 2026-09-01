@@ -60,6 +60,7 @@ EliteState* elite_core_state(size_t slot);
 size_t elite_core_slot(void* instance);
 bool elite_core_is_elite(void* instance);
 void elite_core_try_apply(void* instance);
+void elite_core_probe_life_write(void* instance);
 void elite_core_clear(void* instance);
 void elite_core_mark(void* instance, elite_rank_t rank, int32_t damage, int32_t defense);
 elite_rank_t elite_core_rank(void* instance);
