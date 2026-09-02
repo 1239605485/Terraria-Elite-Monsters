@@ -26,8 +26,11 @@ static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_main_update_hooks[1] = {};
 static size_t g_main_update_hook_count = 0;
 static patch_handle_t g_main_new_text_method = nullptr;
+static patch_handle_t g_main_new_text_fallback_method = nullptr;
 static int g_main_new_text_arg_count = 0;
+static int g_main_new_text_fallback_arg_count = 0;
 static patch_type_t g_main_new_text_color_type = PATCH_UINT8;
+static patch_type_t g_main_new_text_fallback_color_type = PATCH_UINT8;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -63,22 +66,26 @@ bool em_static_field_read_bool(patch_handle_t field, bool *value) {
 }
 
 bool em_main_text_available(void) {
-    return g_main_new_text_method &&
-           patchlib_is_valid(g_main_new_text_method);
+    return (g_main_new_text_method &&
+            patchlib_is_valid(g_main_new_text_method)) ||
+           (g_main_new_text_fallback_method &&
+            patchlib_is_valid(g_main_new_text_fallback_method));
 }
 
-bool em_main_text_show(const char *text, uint8_t red, uint8_t green,
-                       uint8_t blue) {
-    if (!text || !text[0] || !em_main_text_available()) return false;
+static bool invoke_main_text(patch_handle_t method, int argument_count,
+                             patch_type_t color_type, patch_handle_t message,
+                             uint8_t red, uint8_t green, uint8_t blue) {
+    if (!method || !patchlib_is_valid(method) || !message ||
+        !patchlib_is_valid(message)) {
+        return false;
+    }
 
-    patch_handle_t message = patchlib_string_create(text);
-    if (!message || !patchlib_is_valid(message)) return false;
     void *args[4] = {&message, nullptr, nullptr, nullptr};
     int32_t red_i = red;
     int32_t green_i = green;
     int32_t blue_i = blue;
-    if (g_main_new_text_arg_count == 4) {
-        if (g_main_new_text_color_type == PATCH_INT32) {
+    if (argument_count == 4) {
+        if (color_type == PATCH_INT32) {
             args[1] = &red_i;
             args[2] = &green_i;
             args[3] = &blue_i;
@@ -89,11 +96,31 @@ bool em_main_text_show(const char *text, uint8_t red, uint8_t green,
         }
     }
     uint64_t ignored_return = 0;
-    bool invoked = patchlib_method_invoke_args(
-        g_main_new_text_method, PATCH_NULL, &ignored_return, args);
+    return patchlib_method_invoke_args(method, PATCH_NULL, &ignored_return,
+                                       args);
+}
+
+bool em_main_text_show(const char *text, uint8_t red, uint8_t green,
+                       uint8_t blue) {
+    if (!text || !text[0] || !em_main_text_available()) return false;
+
+    patch_handle_t message = patchlib_string_create(text);
+    if (!message || !patchlib_is_valid(message)) return false;
+
+    /* The one-argument overload avoids the byte/int ABI difference seen on
+     * some Android IL2CPP metadata builds. If it is unavailable, try the
+     * validated four-argument overload. */
+    bool invoked = invoke_main_text(
+        g_main_new_text_method, g_main_new_text_arg_count,
+        g_main_new_text_color_type, message, red, green, blue);
+    if (!invoked) {
+        invoked = invoke_main_text(
+            g_main_new_text_fallback_method, g_main_new_text_fallback_arg_count,
+            g_main_new_text_fallback_color_type, message, red, green, blue);
+    }
     if (!invoked) {
         EM_LOG(MOD_LOG_LEVEL_WARNING,
-               "Main.NewText invocation failed; notice disabled for this call");
+               "Main.NewText invocation failed for preferred and fallback overloads");
     }
     return invoked;
 }
@@ -236,9 +263,25 @@ static bool select_new_text_candidate(patch_handle_t method,
         }
     }
     if (supported) {
-        g_main_new_text_method = method;
-        g_main_new_text_arg_count = (int)argument_count;
-        g_main_new_text_color_type = color_type;
+        int candidate_arg_count = (int)argument_count;
+        if (!g_main_new_text_method ||
+            (candidate_arg_count == 1 && g_main_new_text_arg_count != 1)) {
+            if (g_main_new_text_method &&
+                g_main_new_text_arg_count != candidate_arg_count &&
+                !g_main_new_text_fallback_method) {
+                g_main_new_text_fallback_method = g_main_new_text_method;
+                g_main_new_text_fallback_arg_count = g_main_new_text_arg_count;
+                g_main_new_text_fallback_color_type = g_main_new_text_color_type;
+            }
+            g_main_new_text_method = method;
+            g_main_new_text_arg_count = candidate_arg_count;
+            g_main_new_text_color_type = color_type;
+        } else if (g_main_new_text_method != method &&
+                   !g_main_new_text_fallback_method) {
+            g_main_new_text_fallback_method = method;
+            g_main_new_text_fallback_arg_count = candidate_arg_count;
+            g_main_new_text_fallback_color_type = color_type;
+        }
     }
     patchlib_method_signature_free(&signature);
     return supported;
@@ -248,16 +291,11 @@ static void discover_main_text_api(patch_handle_t main_type) {
     /* Parameter-count lookup is fast, but some IL2CPP metadata builds return
      * only one overload or fail to expose an overload by count. Enumerating
      * the method table is the authoritative fallback. */
-    const int parameter_counts[] = {4, 1};
+    const int parameter_counts[] = {1, 4};
     for (int parameter_count : parameter_counts) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(
             main_type, "NewText", parameter_count);
-        if (select_new_text_candidate(method, "param-count")) {
-            EM_LOG(MOD_LOG_LEVEL_INFO,
-                   "Main.NewText selected from parameter-count lookup: params=%d",
-                   parameter_count);
-            return;
-        }
+        (void)select_new_text_candidate(method, "param-count");
     }
 
     tefstd_vector_t methods = {};
@@ -285,10 +323,10 @@ static void discover_main_text_api(patch_handle_t main_type) {
         }
     }
     tefstd_vector_destroy(&methods);
-    if (selected) {
+    if (selected || g_main_new_text_method) {
         EM_LOG(MOD_LOG_LEVEL_INFO,
-               "Main.NewText selected from method enumeration: params=%d",
-               g_main_new_text_arg_count);
+               "Main.NewText selected: preferred_params=%d fallback_params=%d",
+               g_main_new_text_arg_count, g_main_new_text_fallback_arg_count);
         return;
     }
     EM_LOG(MOD_LOG_LEVEL_WARNING,
@@ -423,14 +461,17 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
     }
     g_main_update_hook_count = 0;
     g_main_new_text_method = nullptr;
+    g_main_new_text_fallback_method = nullptr;
     g_main_new_text_arg_count = 0;
+    g_main_new_text_fallback_arg_count = 0;
     g_main_new_text_color_type = PATCH_UINT8;
+    g_main_new_text_fallback_color_type = PATCH_UINT8;
     std::memset(&g_api, 0, sizeof(g_api));
     EM_LOG(MOD_LOG_LEVEL_INFO, "Modular baseline unloaded");
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090403, 1, "2.0.0-alpha4.2"
+    "eternal.future.elitemonsters", 2026090404, 1, "2.0.0-alpha4.3"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

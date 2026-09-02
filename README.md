@@ -1,6 +1,6 @@
 # Elite Monsters
 
-## 当前版本：2.0.0-alpha4.2 模块化增量验证版
+## 当前版本：2.0.0-alpha4.3 模块化增量验证版
 
 当前交付物在 alpha2 稳定底座上只新增被动 WorldRule 状态层：进入世界后按
 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。地形检测、聊天
@@ -16,6 +16,8 @@ alpha4 新增一次性 `Main.NewText` 测试播报，用于验证 WorldRule 首�
 alpha4.1 优先使用四参数 `Main.NewText`，并回退到单参数接口，调用参数严格匹配
 实际签名。
 alpha4.2 在参数数量查找不足时枚举 `Main` 全部 `NewText` 候选方法并记录完整签名。
+alpha4.3 优先调用单参数文本接口，并保留经过签名校验的四参数接口作为回退；
+`Main.Update` 首次回调会发送一次不影响游戏的 UI 探针，用于区分回调链路和世界字段问题。
 
 新的源码按 `src/Core`、`src/NPC`、`src/World`、`src/Boss`、`src/Event`、`src/UI`
 划分；`EliteMonsters/mod.c` 只作迁移参考，不参与 CMake 编译。详见
