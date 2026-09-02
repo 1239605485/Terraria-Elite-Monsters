@@ -1373,7 +1373,7 @@ static terrain_rule_t terrain_rule_for_player_instance(patch_handle_t player) {
     }
     if (rock) return TERRAIN_RULE_CAVE;
     if (dirt) return TERRAIN_RULE_UNDERGROUND;
-    if (read_player_zone_flag(player_index, g_player_zone_forest_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_forest_field)) {
         return TERRAIN_RULE_FOREST;
     }
     return TERRAIN_RULE_FOREST;
