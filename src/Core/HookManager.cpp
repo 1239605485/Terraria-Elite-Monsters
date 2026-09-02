@@ -24,6 +24,8 @@ static patch_hook_id_t g_setdefaults_hooks[8] = {};
 static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_main_update_hooks[1] = {};
 static size_t g_main_update_hook_count = 0;
+static patch_hook_id_t g_player_update_hooks[1] = {};
+static size_t g_player_update_hook_count = 0;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -121,6 +123,38 @@ static void cache_main_api(void) {
 
 }
 
+static void cache_player_api(void) {
+    patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
+    if (!player_type || !patchlib_is_valid(player_type)) {
+        EM_LOG(MOD_LOG_LEVEL_WARNING, "Terraria.Player unavailable");
+        return;
+    }
+
+    g_api.player_type_class = player_type;
+    g_api.player_zone_dungeon = patchlib_type_get_field(player_type, "ZoneDungeon");
+    g_api.player_zone_corrupt = patchlib_type_get_field(player_type, "ZoneCorrupt");
+    g_api.player_zone_crimson = patchlib_type_get_field(player_type, "ZoneCrimson");
+    g_api.player_zone_jungle = patchlib_type_get_field(player_type, "ZoneJungle");
+    g_api.player_zone_snow = patchlib_type_get_field(player_type, "ZoneSnow");
+    g_api.player_zone_desert = patchlib_type_get_field(player_type, "ZoneDesert");
+    g_api.player_zone_beach = patchlib_type_get_field(player_type, "ZoneBeach");
+    g_api.player_zone_underworld =
+        patchlib_type_get_field(player_type, "ZoneUnderworldHeight");
+    g_api.player_zone_hallow = patchlib_type_get_field(player_type, "ZoneHallow");
+    g_api.player_zone_sky = patchlib_type_get_field(player_type, "ZoneSkyHeight");
+    g_api.player_zone_forest = patchlib_type_get_field(player_type, "ZoneForest");
+    g_api.player_zone_rock_layer =
+        patchlib_type_get_field(player_type, "ZoneRockLayerHeight");
+    g_api.player_zone_dirt_layer =
+        patchlib_type_get_field(player_type, "ZoneDirtLayerHeight");
+    g_api.player_zone_glowshroom =
+        patchlib_type_get_field(player_type, "ZoneGlowshroom");
+    g_api.player_zone_spider = patchlib_type_get_field(player_type, "ZoneSpider");
+    g_api.player_zone_meteor = patchlib_type_get_field(player_type, "ZoneMeteor");
+    g_api.player_zone_temple =
+        patchlib_type_get_field(player_type, "ZoneLihzhardian");
+}
+
 static bool install_main_update_hook(patch_handle_t method,
                                      const char *name) {
     if (!method || !patchlib_is_valid(method) ||
@@ -177,6 +211,46 @@ static void discover_main_update_hook(void) {
     }
 
     em_world_rule_set_hook_installed(false);
+}
+
+static bool install_player_update_hook(patch_handle_t method, int parameter_count) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_player_update_hook_count >= 1) {
+        return false;
+    }
+
+    patch_method_signature_t signature = {};
+    if (!patchlib_method_get_signature(method, &signature)) return false;
+    bool supported = signature.is_instance &&
+                     signature.return_type == PATCH_VOID &&
+                     tefstd_vector_size(&signature.arg_types) <= 2;
+    if (supported) {
+        patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+            method, nullptr, em_terrain_detector_update);
+        supported = hook_id != PATCH_HOOK_INVALID_ID;
+        if (supported) {
+            g_player_update_hooks[g_player_update_hook_count++] = hook_id;
+            EM_LOG(MOD_LOG_LEVEL_INFO,
+                   "Terrain Player.Update hook installed: params=%d id=%d",
+                   parameter_count, (int)hook_id);
+        }
+    }
+    patchlib_method_signature_free(&signature);
+    return supported;
+}
+
+static void discover_player_update_hook(void) {
+    if (!em_terrain_detector_enabled()) return;
+    patch_handle_t player_type = g_api.player_type_class;
+    for (int parameter_count = 0; parameter_count <= 2; ++parameter_count) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            player_type, "Update", parameter_count);
+        if (install_player_update_hook(method, parameter_count)) {
+            em_terrain_detector_set_hook_installed(true);
+            return;
+        }
+    }
+    em_terrain_detector_set_hook_installed(false);
 }
 
 static void discover_npc_hooks(patch_handle_t npc_type) {
@@ -248,6 +322,7 @@ static void init_mod(kernel_mod_handle_t *handle) {
 
     cache_npc_api(npc_type);
     cache_main_api();
+    cache_player_api();
     initialize_modules();
     if (em_elite_npc_enabled()) {
         discover_npc_hooks(npc_type);
@@ -256,6 +331,7 @@ static void init_mod(kernel_mod_handle_t *handle) {
                "Modular NPC fields unavailable; NPC module disabled");
     }
     discover_main_update_hook();
+    discover_player_update_hook();
     if (em_world_rule_enabled()) {
         EM_LOG(MOD_LOG_LEVEL_INFO,
                "Modular baseline loaded: Core + NPC + passive WorldRule state; "
@@ -278,13 +354,17 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
         patchlib_uninstall_hook(g_main_update_hooks[i]);
     }
     g_main_update_hook_count = 0;
+    for (size_t i = 0; i < g_player_update_hook_count; ++i) {
+        patchlib_uninstall_hook(g_player_update_hooks[i]);
+    }
+    g_player_update_hook_count = 0;
     std::memset(&g_api, 0, sizeof(g_api));
     EM_LOG(MOD_LOG_LEVEL_INFO, "Modular baseline unloaded");
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090405, 1,
-    "2.0.0-alpha4.3-safe-noui"
+    "eternal.future.elitemonsters", 2026090406, 1,
+    "2.0.0-alpha4.3-safe-noui-terrain"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

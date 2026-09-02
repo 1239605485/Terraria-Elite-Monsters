@@ -27,6 +27,24 @@ typedef struct em_game_api_t {
     patch_handle_t main_type_class;
     patch_handle_t main_game_menu;
     patch_handle_t main_world_id;
+    patch_handle_t player_type_class;
+    patch_handle_t player_zone_dungeon;
+    patch_handle_t player_zone_corrupt;
+    patch_handle_t player_zone_crimson;
+    patch_handle_t player_zone_jungle;
+    patch_handle_t player_zone_snow;
+    patch_handle_t player_zone_desert;
+    patch_handle_t player_zone_beach;
+    patch_handle_t player_zone_underworld;
+    patch_handle_t player_zone_hallow;
+    patch_handle_t player_zone_sky;
+    patch_handle_t player_zone_forest;
+    patch_handle_t player_zone_rock_layer;
+    patch_handle_t player_zone_dirt_layer;
+    patch_handle_t player_zone_glowshroom;
+    patch_handle_t player_zone_spider;
+    patch_handle_t player_zone_meteor;
+    patch_handle_t player_zone_temple;
 } em_game_api_t;
 
 const em_game_api_t *em_game_api(void);

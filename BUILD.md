@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha4.3-safe-noui 模块化安全回退版
+# EliteMonsters 2.0.0-alpha4.3-safe-noui-terrain 模块化增量验证版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -52,11 +52,13 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha4.3-safe-noui installs the minimal NPC `SetDefaults` hook plus
+Version 2.0.0-alpha4.3-safe-noui-terrain installs the minimal NPC `SetDefaults` hook plus
 one signature-checked `Main.Update` hook for the passive WorldRule state layer.
+It additionally installs one signature-checked `Player.Update` hook for read-only
+Zone state logging; no terrain rule effect is executed.
 The entire UI/NewText path is disabled: startup does not discover `Main.NewText`,
 and the update callback emits no probe or world-entry message. It does not install
-Player, AI, terrain, boss, event, reward, or other feature hooks. This is
+AI, boss, event, reward, or other feature hooks. This is
 intentional: each later module will be enabled and tested independently.
 
 The alpha3.1 correction reads `Main.gameMenu` as a validated static boolean
