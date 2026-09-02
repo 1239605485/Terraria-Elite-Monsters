@@ -231,6 +231,9 @@ static size_t g_mouse_text_hook_count = 0;
 static patch_hook_id_t g_ai_hooks[AI_HOOK_LIMIT];
 static size_t g_ai_hook_count = 0;
 static int g_ai_method_token = -1;
+#define MAIN_UPDATE_HOOK_LIMIT 1
+static patch_hook_id_t g_main_update_hooks[MAIN_UPDATE_HOOK_LIMIT];
+static size_t g_main_update_hook_count = 0;
 #define LOOT_HOOK_LIMIT 1
 static patch_hook_id_t g_loot_hooks[LOOT_HOOK_LIMIT];
 static size_t g_loot_hook_count = 0;
@@ -260,7 +263,6 @@ static clock_t g_last_fallback_clock = 0;
 static uint32_t g_rule_ticks = 0;
 static uint32_t g_kill_count = 0;
 static terrain_rule_t g_last_reported_terrain = TERRAIN_RULE_NONE;
-static uint32_t g_terrain_report_cooldown = 0;
 static bool g_player_session_seen = false;
 static bool g_player_session_active = false;
 static bool g_world_notice_on_session_enter = false;
@@ -1255,7 +1257,6 @@ static void advance_world_rule_clock(void) {
          * Keep the world's rule roll, but make the next active terrain emit
          * its entry notice again. */
         g_last_reported_terrain = TERRAIN_RULE_NONE;
-        g_terrain_report_cooldown = 0;
         g_tide_cooldown = 0;
         ELITE_LOG(MOD_LOG_LEVEL_INFO,
                   "World session restarted; terrain notice state reset");
@@ -1273,7 +1274,6 @@ static void advance_world_rule_clock(void) {
     g_spawn_events_this_tick = 0;
     ++g_rule_ticks;
     if (g_tide_cooldown > 0) --g_tide_cooldown;
-    if (g_terrain_report_cooldown > 0) --g_terrain_report_cooldown;
 
     if (g_global_rule_count > 0 &&
         g_rule_ticks % GLOBAL_RULE_SHIFT_INTERVAL == 0u &&
@@ -1371,12 +1371,13 @@ static const char *terrain_display_name(terrain_rule_t terrain) {
 }
 
 static void report_terrain_transition(terrain_rule_t terrain) {
-    if (terrain == g_last_reported_terrain || g_terrain_report_cooldown > 0) {
-        return;
-    }
+    /* A terrain notice is an edge-triggered event.  The old global cooldown
+     * could swallow a legitimate transition when the player crossed two
+     * biome boundaries quickly, making the feature look like a one-shot
+     * announcement.  The cached terrain already debounces repeated ticks. */
+    if (terrain == g_last_reported_terrain) return;
     terrain_rule_t previous = g_last_reported_terrain;
     g_last_reported_terrain = terrain;
-    g_terrain_report_cooldown = 30;
     if (terrain > TERRAIN_RULE_NONE && terrain < TERRAIN_RULE_COUNT) {
         ELITE_LOG(MOD_LOG_LEVEL_INFO, "Terrain rule enabled: %s - %s",
                   g_terrain_rule_info[terrain].name,
@@ -2005,7 +2006,6 @@ static void handle_rule_death(patch_handle_t instance) {
     int32_t npc_type = g_rule_npc_types[index];
     int32_t player = target_player_index(instance);
     terrain_rule_t terrain = terrain_rule_for_player(player);
-    report_terrain_transition(terrain);
 
     if (!boss) {
         ++g_kill_count;
@@ -3205,7 +3205,6 @@ static void update_world_rule_notices(void) {
         if (g_player_session_active) {
             g_player_session_active = false;
             g_last_reported_terrain = TERRAIN_RULE_NONE;
-            g_terrain_report_cooldown = 0;
             g_world_notice_on_session_enter = true;
         }
         return;
@@ -3225,7 +3224,6 @@ static void update_world_rule_notices(void) {
         if (g_player_session_active) {
             g_player_session_active = false;
             g_last_reported_terrain = TERRAIN_RULE_NONE;
-            g_terrain_report_cooldown = 0;
             g_world_notice_on_session_enter = true;
         }
         return;
@@ -3239,7 +3237,6 @@ static void update_world_rule_notices(void) {
         g_player_session_seen = true;
         g_player_session_active = true;
         g_last_reported_terrain = TERRAIN_RULE_NONE;
-        g_terrain_report_cooldown = 0;
     }
     initialize_world_rules();
     if (g_world_notice_on_session_enter) {
@@ -3248,6 +3245,20 @@ static void update_world_rule_notices(void) {
     }
     advance_world_rule_clock();
     report_terrain_transition(terrain_rule_for_player(local_player));
+}
+
+/* NPC.AI is not a reliable world/session clock: it may not run while the
+ * world is loading, and a world with no active NPCs has no AI callback at
+ * all.  Drive the notification state from Main.Update instead.  The AI
+ * callback remains as a compatibility fallback for builds that do not expose
+ * Main.Update through metadata. */
+static void main_update_postfix(patch_handle_t instance, void **args, void *result,
+                                const patch_method_signature_t *sig_info) {
+    (void)instance;
+    (void)args;
+    (void)result;
+    (void)sig_info;
+    update_world_rule_notices();
 }
 
 /* AI enhancement layer. The original NPC.AI runs first. Normal and rare
@@ -3262,9 +3273,9 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     /* Initialise from the first safe NPC-AI callback as a fallback. If this
      * callback happens before world data is populated, the stable fallback
      * identity is replaced once Main.worldID/worldName becomes available. */
+    update_world_rule_notices();
     initialize_world_rules();
     advance_world_rule_clock();
-    update_world_rule_notices();
     if (!instance || !is_elite_instance(instance)) return;
 
     initialize_world_rules();
@@ -3278,7 +3289,6 @@ static void ai_postfix(patch_handle_t instance, void **args, void *result,
     if (player >= 0) (void)write_i32(g_field_target, instance, player);
 
     terrain_rule_t terrain = terrain_rule_for_player(player);
-    report_terrain_transition(terrain);
     apply_terrain_rule(instance, index, terrain, player);
 
     bool boss = false;
@@ -3476,6 +3486,63 @@ static void discover_ai_api(patch_handle_t npc) {
               "NPC AI enhancement hook not found in this game build");
 }
 
+static bool install_main_update_hook(patch_handle_t method,
+                                      const char *name) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_main_update_hook_count >= MAIN_UPDATE_HOOK_LIMIT) {
+        return false;
+    }
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return false;
+    bool supported = sig.is_instance && sig.return_type == PATCH_VOID &&
+                     tefstd_vector_size(&sig.arg_types) <= 2;
+    if (!supported) {
+        patchlib_method_signature_free(&sig);
+        return false;
+    }
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, main_update_postfix);
+    if (hook_id == PATCH_HOOK_INVALID_ID) {
+        patchlib_method_signature_free(&sig);
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Main update notification hook failed: name=%s", name);
+        return false;
+    }
+
+    g_main_update_hooks[g_main_update_hook_count++] = hook_id;
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Main update notification hook installed: name=%s params=%d id=%d",
+              name, (int)tefstd_vector_size(&sig.arg_types), (int)hook_id);
+    patchlib_method_signature_free(&sig);
+    return true;
+}
+
+/* Resolve the per-frame world update entry point.  Terraria versions expose
+ * either Main.Update(GameTime) or a parameterless DoUpdate dispatcher. */
+static void discover_main_update_api(patch_handle_t main_type) {
+    const char *names[2] = {"Update", "DoUpdate"};
+    for (size_t name_index = 0; name_index < 2; ++name_index) {
+        for (int args_count = 0; args_count <= 2; ++args_count) {
+            patch_handle_t method = patchlib_type_get_method_by_param_count(
+                main_type, names[name_index], args_count);
+            if (install_main_update_hook(method, names[name_index])) return;
+        }
+    }
+
+    /* Some IL2CPP metadata tables do not expose overloads through the
+     * parameter-count lookup.  Retry the exact names before falling back to
+     * the AI-driven compatibility path. */
+    for (size_t name_index = 0; name_index < 2; ++name_index) {
+        patch_handle_t method = patchlib_type_get_method(
+            main_type, names[name_index]);
+        if (install_main_update_hook(method, names[name_index])) return;
+    }
+    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+              "Main update notification hook unavailable; using NPC AI fallback");
+}
+
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
     srand((unsigned)(time(NULL) ^ (time_t)(uintptr_t)handle));
@@ -3492,6 +3559,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     patch_handle_t main_type = patchlib_type_get_type("Terraria", "Main");
     if (main_type && patchlib_is_valid(main_type)) {
         discover_main_text_api(main_type);
+        discover_main_update_api(main_type);
         discover_mouse_text_api(main_type);
         if (npc && patchlib_is_valid(npc)) {
             patch_handle_t item_type = patchlib_type_get_type("Terraria", "Item");
@@ -3527,6 +3595,10 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     }
     g_ai_hook_count = 0;
     g_ai_method_token = -1;
+    for (size_t i = 0; i < g_main_update_hook_count; ++i) {
+        patchlib_uninstall_hook(g_main_update_hooks[i]);
+    }
+    g_main_update_hook_count = 0;
     for (size_t i = 0; i < g_loot_hook_count; ++i) {
         patchlib_uninstall_hook(g_loot_hooks[i]);
     }
@@ -3580,9 +3652,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090109,
+    .version_code = 2026090201,
     .api_version = 1,
-    .version = "1.3.4"
+    .version = "1.3.5"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
