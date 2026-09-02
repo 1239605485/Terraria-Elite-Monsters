@@ -29,7 +29,6 @@ static bool g_hook_installed = false;
 static bool g_world_active = false;
 static bool g_rules_initialized = false;
 static bool g_field_warning_logged = false;
-static bool g_notice_probe_sent = false;
 static uint32_t g_world_identity = 0;
 static uint32_t g_rng_state = 0;
 static int g_active_rule_count = 0;
@@ -89,7 +88,6 @@ void em_world_rule_initialize(const em_game_api_t *api) {
     g_world_active = false;
     g_rules_initialized = false;
     g_field_warning_logged = false;
-    g_notice_probe_sent = false;
     g_world_identity = 0;
     g_rng_state = 0;
     g_active_rule_count = 0;
@@ -127,14 +125,6 @@ void em_world_rule_update(patch_handle_t instance, void **args, void *result,
     (void)sig_info;
     if (!g_enabled || !g_hook_installed || !g_api) return;
 
-    /* One controlled UI probe at the callback entry. This deliberately runs
-     * before Main.gameMenu/worldID reads so a missing field cannot hide whether
-     * Main.Update itself is reaching the callback. */
-    if (!g_notice_probe_sent) {
-        g_notice_probe_sent = true;
-        (void)em_notice_show("[精英变异] Main.Update 播报测试");
-    }
-
     bool game_menu = true;
     int32_t world_id = 0;
     if (!em_static_field_read_bool(g_api->main_game_menu, &game_menu) ||
@@ -161,7 +151,6 @@ void em_world_rule_update(patch_handle_t instance, void **args, void *result,
             initialize_rules(identity);
         }
         g_world_active = true;
-        (void)em_notice_show("[精英变异] 世界规则状态层已激活");
         EM_WORLD_LOG(MOD_LOG_LEVEL_INFO,
                      "World session active; passive rule effects remain disabled");
     }
@@ -173,7 +162,6 @@ void em_world_rule_shutdown(void) {
     g_api = nullptr;
     reset_world_session();
     g_rules_initialized = false;
-    g_notice_probe_sent = false;
     g_world_identity = 0;
     g_rng_state = 0;
     g_active_rule_count = 0;

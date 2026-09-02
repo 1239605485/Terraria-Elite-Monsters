@@ -5,7 +5,6 @@
 #include "mod_core.h"
 #include "mod_logger.h"
 #include "tefkernel/patchlib/property.h"
-#include "tefkernel/patchlib/struct/string.h"
 
 #include <cstdlib>
 #include <ctime>
@@ -27,9 +26,6 @@ static patch_hook_id_t g_main_update_hooks[1] = {};
 static size_t g_main_update_hook_count = 0;
 static patch_hook_id_t g_player_update_hooks[1] = {};
 static size_t g_player_update_hook_count = 0;
-static patch_handle_t g_main_new_text_method = nullptr;
-static int g_main_new_text_arg_count = 0;
-static patch_type_t g_main_new_text_color_type = PATCH_UINT8;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -62,29 +58,6 @@ bool em_static_field_read_bool(patch_handle_t field, bool *value) {
     if (!value || !em_static_field_valid(field, PATCH_BOOL)) return false;
     patchlib_field_get_value(field, PATCH_NULL, value);
     return true;
-}
-
-bool em_main_text_available(void) {
-    return g_main_new_text_method && patchlib_is_valid(g_main_new_text_method);
-}
-
-bool em_main_text_show(const char *text, uint8_t red, uint8_t green,
-                       uint8_t blue) {
-    if (!text || !text[0] || !em_main_text_available()) return false;
-    patch_handle_t message = patchlib_string_create(text);
-    if (!message || !patchlib_is_valid(message)) return false;
-    void *args[4] = {&message, nullptr, nullptr, nullptr};
-    int32_t red_i = red, green_i = green, blue_i = blue;
-    if (g_main_new_text_arg_count == 4) {
-        if (g_main_new_text_color_type == PATCH_UINT8) {
-            args[1] = &red; args[2] = &green; args[3] = &blue;
-        } else {
-            args[1] = &red_i; args[2] = &green_i; args[3] = &blue_i;
-        }
-    }
-    uint64_t ignored_return = 0;
-    return patchlib_method_invoke_args(g_main_new_text_method, PATCH_NULL,
-                                       &ignored_return, args);
 }
 
 bool em_field_read_bool(patch_handle_t field, patch_handle_t instance,
@@ -148,51 +121,6 @@ static void cache_main_api(void) {
         g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
     }
 
-    /* Controlled notice experiment: inspect only the two known safe overload
-     * shapes, then stop at the first fully validated candidate. */
-    const int arg_counts[] = {4, 1};
-    for (int arg_count : arg_counts) {
-        patch_handle_t method = patchlib_type_get_method_by_param_count(
-            main_type, "NewText", arg_count);
-        if (!method || !patchlib_is_valid(method)) continue;
-        patch_method_signature_t signature = {};
-        if (!patchlib_method_get_signature(method, &signature)) continue;
-        size_t count = tefstd_vector_size(&signature.arg_types);
-        bool supported = !signature.is_instance &&
-                         signature.return_type == PATCH_VOID &&
-                         count == (size_t)arg_count;
-        patch_type_t *text_type = supported
-                                      ? static_cast<patch_type_t *>(
-                                            tefstd_vector_at(&signature.arg_types, 0))
-                                      : nullptr;
-        supported = supported && text_type &&
-                    (*text_type == PATCH_OBJECT || *text_type == PATCH_POINTER);
-        patch_type_t color_type = PATCH_UINT8;
-        if (supported && arg_count == 4) {
-            bool bytes = true, ints = true;
-            for (size_t i = 1; i < 4; ++i) {
-                patch_type_t *color = static_cast<patch_type_t *>(
-                    tefstd_vector_at(&signature.arg_types, i));
-                bytes = bytes && color && *color == PATCH_UINT8;
-                ints = ints && color && *color == PATCH_INT32;
-            }
-            supported = bytes || ints;
-            if (ints) color_type = PATCH_INT32;
-        }
-        if (supported) {
-            g_main_new_text_method = method;
-            g_main_new_text_arg_count = arg_count;
-            g_main_new_text_color_type = color_type;
-            EM_LOG(MOD_LOG_LEVEL_INFO,
-                   "Main.NewText notice API selected: params=%d colorType=%d",
-                   arg_count, (int)color_type);
-            patchlib_method_signature_free(&signature);
-            return;
-        }
-        patchlib_method_signature_free(&signature);
-    }
-    EM_LOG(MOD_LOG_LEVEL_WARNING,
-           "Main.NewText notice API unavailable; notice module disabled");
 }
 
 static void cache_player_api(void) {
@@ -398,11 +326,9 @@ static void initialize_modules(void) {
     em_terrain_detector_initialize(&g_api);
     em_boss_modify_initialize(&g_api);
     em_random_event_initialize(&g_api);
-    em_notice_initialize(&g_api);
 }
 
 static void shutdown_modules(void) {
-    em_notice_shutdown();
     em_random_event_shutdown();
     em_boss_modify_shutdown();
     em_terrain_detector_shutdown();
@@ -433,8 +359,6 @@ static void init_mod(kernel_mod_handle_t *handle) {
     }
     discover_main_update_hook();
     discover_player_update_hook();
-    EM_LOG(em_notice_enabled() ? MOD_LOG_LEVEL_INFO : MOD_LOG_LEVEL_WARNING,
-           "Notice module final status: enabled=%d", em_notice_enabled() ? 1 : 0);
     EM_LOG(em_terrain_detector_enabled() ? MOD_LOG_LEVEL_INFO
                                          : MOD_LOG_LEVEL_WARNING,
            "Terrain module final status: enabled=%d player_hook_count=%d",
@@ -471,8 +395,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090410, 1,
-    "2.0.0-alpha4.3-safe-noui-terrain-notice-probe"
+    "eternal.future.elitemonsters", 2026090411, 1,
+    "2.0.0-alpha4.3-safe-noui-terrain-rollback"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

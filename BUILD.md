@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha4.3-safe-noui-terrain-notice-probe 模块化增量验证版
+# EliteMonsters 2.0.0-alpha4.3-safe-noui-terrain-rollback 稳定回退版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -52,13 +52,12 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha4.3-safe-noui-terrain-notice-probe installs the minimal NPC `SetDefaults` hook plus
+Version 2.0.0-alpha4.3-safe-noui-terrain-rollback installs the minimal NPC `SetDefaults` hook plus
 one signature-checked `Main.Update` hook for the passive WorldRule state layer.
 It additionally installs one signature-checked `Player.Update` hook for read-only
 Zone state logging; no terrain rule effect is executed.
-The UI/NewText path is restricted to one fully signature-checked test message:
-startup checks only two known overload shapes, and the world callback emits one
-world-entry notice without a probe or terrain messages. It does not install
+The UI/NewText path is disabled after the controlled notice probe caused SIGABRT.
+It does not install
 AI, boss, event, reward, or other feature hooks. This is
 intentional: each later module will be enabled and tested independently.
 
