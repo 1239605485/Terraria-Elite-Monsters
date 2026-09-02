@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - 'EliteMonsters/**'
+      - 'src/**'
       - 'mod-api/**'
       - '.github/workflows/android-arm64.yml'
 
