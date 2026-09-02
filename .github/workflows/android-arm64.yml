@@ -5,7 +5,6 @@ on:
   push:
     paths:
       - 'EliteMonsters/**'
-      - 'mod-api/**'
       - '.github/workflows/android-arm64.yml'
 
 jobs:
@@ -56,4 +55,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: EliteMonsters-android-arm64-installable
-          path: EliteMonsters-android-arm64.zip
+          # Upload the package directory itself so the downloaded artifact
+          # opens directly with Manifest.json at its root (no nested ZIP).
+          path: package/**
