@@ -36,6 +36,8 @@ bool em_field_read_i32(patch_handle_t field, patch_handle_t instance,
                        int32_t *value);
 bool em_static_field_read_i32(patch_handle_t field, int32_t *value);
 bool em_static_field_read_bool(patch_handle_t field, bool *value);
+bool em_main_text_available(void);
+bool em_main_text_show(const char *text);
 bool em_field_read_bool(patch_handle_t field, patch_handle_t instance,
                         bool *value);
 bool em_field_read_float(patch_handle_t field, patch_handle_t instance,

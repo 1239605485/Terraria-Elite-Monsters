@@ -5,6 +5,7 @@
 #include "mod_core.h"
 #include "mod_logger.h"
 #include "tefkernel/patchlib/property.h"
+#include "tefkernel/patchlib/struct/string.h"
 
 #include <cstdlib>
 #include <ctime>
@@ -24,6 +25,7 @@ static patch_hook_id_t g_setdefaults_hooks[8] = {};
 static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_main_update_hooks[1] = {};
 static size_t g_main_update_hook_count = 0;
+static patch_handle_t g_main_new_text_method = nullptr;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -56,6 +58,27 @@ bool em_static_field_read_bool(patch_handle_t field, bool *value) {
     if (!value || !em_static_field_valid(field, PATCH_BOOL)) return false;
     patchlib_field_get_value(field, PATCH_NULL, value);
     return true;
+}
+
+bool em_main_text_available(void) {
+    return g_main_new_text_method &&
+           patchlib_is_valid(g_main_new_text_method);
+}
+
+bool em_main_text_show(const char *text) {
+    if (!text || !text[0] || !em_main_text_available()) return false;
+
+    patch_handle_t message = patchlib_string_create(text);
+    if (!message || !patchlib_is_valid(message)) return false;
+    void *args[1] = {&message};
+    uint64_t ignored_return = 0;
+    bool invoked = patchlib_method_invoke_args(
+        g_main_new_text_method, PATCH_NULL, &ignored_return, args);
+    if (!invoked) {
+        EM_LOG(MOD_LOG_LEVEL_WARNING,
+               "Main.NewText invocation failed; notice disabled for this call");
+    }
+    return invoked;
 }
 
 bool em_field_read_bool(patch_handle_t field, patch_handle_t instance,
@@ -118,6 +141,34 @@ static void cache_main_api(void) {
     if (!g_api.main_world_id || !patchlib_is_valid(g_api.main_world_id)) {
         g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
     }
+
+    patch_handle_t method = patchlib_type_get_method_by_param_count(
+        main_type, "NewText", 1);
+    if (method && patchlib_is_valid(method)) {
+        patch_method_signature_t signature = {};
+        if (patchlib_method_get_signature(method, &signature)) {
+            patch_type_t *argument_type =
+                static_cast<patch_type_t *>(
+                    tefstd_vector_at(&signature.arg_types, 0));
+            bool text_argument =
+                tefstd_vector_size(&signature.arg_types) == 1 &&
+                argument_type &&
+                (*argument_type == PATCH_OBJECT ||
+                 *argument_type == PATCH_POINTER);
+            bool supported = !signature.is_instance &&
+                             signature.return_type == PATCH_VOID &&
+                             text_argument;
+            if (supported) g_main_new_text_method = method;
+            patchlib_method_signature_free(&signature);
+            if (supported) {
+                EM_LOG(MOD_LOG_LEVEL_INFO,
+                       "Main.NewText notice API available: params=1");
+                return;
+            }
+        }
+    }
+    EM_LOG(MOD_LOG_LEVEL_WARNING,
+           "Main.NewText notice API unavailable; UI Notice disabled");
 }
 
 static bool install_main_update_hook(patch_handle_t method,
@@ -279,12 +330,13 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
         patchlib_uninstall_hook(g_main_update_hooks[i]);
     }
     g_main_update_hook_count = 0;
+    g_main_new_text_method = nullptr;
     std::memset(&g_api, 0, sizeof(g_api));
     EM_LOG(MOD_LOG_LEVEL_INFO, "Modular baseline unloaded");
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090305, 1, "2.0.0-alpha3.2"
+    "eternal.future.elitemonsters", 2026090401, 1, "2.0.0-alpha4"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
