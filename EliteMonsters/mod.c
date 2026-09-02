@@ -3210,9 +3210,7 @@ static void apply_legendary_movement(patch_handle_t instance, size_t index,
     }
 }
 
-/* Common notification path for both Main.Update and Player.Update.  The
- * Player.Update hook supplies the real Player object, which avoids the
- * fragile Main.player[] array access on Android IL2CPP builds. */
+/* Common notification path for Main.Update. */
 static void update_world_rule_notices_for_instance(patch_handle_t player_instance) {
     if (!player_instance || !patchlib_is_valid(player_instance)) return;
     bool game_menu = false;
@@ -3271,27 +3269,23 @@ static void update_world_rule_notices(void) {
     update_world_rule_notices_for_instance(player_instance);
 }
 
-/* Terraria normally calls Player.Update(int playerIndex) once per active
- * player every frame.  Hooking this point makes terrain announcements
- * independent from Main.player[] and also independent from whether any NPC
- * exists in the world. */
-static void player_update_postfix(patch_handle_t instance, void **args,
-                                  void *result,
-                                  const patch_method_signature_t *sig_info) {
+/* UpdateBiomes is a small, parameterless Player method that runs after the
+ * vanilla Zone* flags are refreshed.  It is safer to hook than the large
+ * Player.Update dispatcher, whose Android IL2CPP trampoline can abort while
+ * entering a world. */
+static void player_update_biomes_postfix(patch_handle_t instance, void **args,
+                                         void *result,
+                                         const patch_method_signature_t *sig_info) {
+    (void)args;
     (void)result;
-    int32_t player_index = -1;
-    if (args && sig_info && tefstd_vector_size(&sig_info->arg_types) > 0 &&
-        args[0] && signature_arg_is(sig_info, 0, PATCH_INT32)) {
-        player_index = *(int32_t *)args[0];
-    }
-
-    int32_t local_player = -1;
-    (void)read_i32(g_main_my_player_field, NULL, &local_player);
-    if (local_player >= 0 && local_player <= 255 &&
-        player_index >= 0 && player_index != local_player) {
+    (void)sig_info;
+    if (!instance || !patchlib_is_valid(instance)) return;
+    bool game_menu = false;
+    if (valid_field(g_main_game_menu_field, PATCH_BOOL) &&
+        read_bool(g_main_game_menu_field, NULL, &game_menu) && game_menu) {
         return;
     }
-    update_world_rule_notices_for_instance(instance);
+    report_terrain_transition(terrain_rule_for_player_instance(instance));
 }
 
 /* NPC.AI is not a reliable world/session clock: it may not run while the
@@ -3590,7 +3584,7 @@ static void discover_main_update_api(patch_handle_t main_type) {
               "Main update notification hook unavailable; using NPC AI fallback");
 }
 
-static bool install_player_update_hook(patch_handle_t method,
+static bool install_player_biomes_hook(patch_handle_t method,
                                        const char *name) {
     if (!method || !patchlib_is_valid(method) ||
         g_player_update_hook_count >= PLAYER_UPDATE_HOOK_LIMIT) {
@@ -3601,56 +3595,48 @@ static bool install_player_update_hook(patch_handle_t method,
     if (!patchlib_method_get_signature(method, &sig)) return false;
     size_t arg_count = tefstd_vector_size(&sig.arg_types);
     bool supported = sig.is_instance && sig.return_type == PATCH_VOID &&
-                     (arg_count == 0 ||
-                      (arg_count == 1 && signature_arg_is(&sig, 0,
-                                                           PATCH_INT32)));
+                     arg_count == 0;
     if (!supported) {
         patchlib_method_signature_free(&sig);
         return false;
     }
 
     patch_hook_id_t hook_id = patchlib_install_prepost_hook(
-        method, NULL, player_update_postfix);
+        method, NULL, player_update_biomes_postfix);
     if (hook_id == PATCH_HOOK_INVALID_ID) {
         patchlib_method_signature_free(&sig);
         return false;
     }
     g_player_update_hooks[g_player_update_hook_count++] = hook_id;
     ELITE_LOG(MOD_LOG_LEVEL_INFO,
-              "Player update terrain hook installed: name=%s params=%d id=%d",
+              "Player.UpdateBiomes terrain hook installed: name=%s params=%d id=%d",
               name, (int)arg_count, (int)hook_id);
     patchlib_method_signature_free(&sig);
     return true;
 }
 
-static void discover_player_update_api(patch_handle_t player_type) {
+static void discover_player_biomes_api(patch_handle_t player_type) {
     if (!player_type || !patchlib_is_valid(player_type)) return;
 
-    /* Current Terraria builds expose Player.Update(int). Keep the parameterless
-     * form as a compatibility option for builds that dispatch the index
-     * elsewhere. */
-    const int arg_counts[2] = {1, 0};
-    for (size_t i = 0; i < 2; ++i) {
-        patch_handle_t method = patchlib_type_get_method_by_param_count(
-            player_type, "Update", arg_counts[i]);
-        if (install_player_update_hook(method, "Update")) return;
-    }
+    patch_handle_t method = patchlib_type_get_method_by_param_count(
+        player_type, "UpdateBiomes", 0);
+    if (install_player_biomes_hook(method, "UpdateBiomes")) return;
 
-    patch_handle_t method = patchlib_type_get_method(player_type, "Update");
-    if (install_player_update_hook(method, "Update")) return;
+    method = patchlib_type_get_method(player_type, "UpdateBiomes");
+    if (install_player_biomes_hook(method, "UpdateBiomes")) return;
 
     /* Metadata lookup can omit overloads. Enumerate the actual method table so
      * a renamed overload is still found without guessing its address. */
     tefstd_vector_t methods = {0};
     if (!tefstd_vector_init(&methods, sizeof(patch_handle_t))) {
-        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Player.Update terrain hook method vector unavailable");
+    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+              "Player.UpdateBiomes terrain hook method vector unavailable");
         return;
     }
     if (!patchlib_type_get_methods(player_type, true, &methods)) {
         tefstd_vector_destroy(&methods);
         ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-                  "Player.Update terrain hook unavailable");
+                  "Player.UpdateBiomes terrain hook unavailable");
         return;
     }
     size_t method_count = tefstd_vector_size(&methods);
@@ -3660,15 +3646,15 @@ static void discover_player_update_api(patch_handle_t player_type) {
         const char *candidate_name = candidate && patchlib_is_valid(candidate)
                                          ? patchlib_method_get_name(candidate)
                                          : NULL;
-        if (candidate_name && strcmp(candidate_name, "Update") == 0 &&
-            install_player_update_hook(candidate, candidate_name)) {
+        if (candidate_name && strcmp(candidate_name, "UpdateBiomes") == 0 &&
+            install_player_biomes_hook(candidate, candidate_name)) {
             tefstd_vector_destroy(&methods);
             return;
         }
     }
     tefstd_vector_destroy(&methods);
     ELITE_LOG(MOD_LOG_LEVEL_WARNING,
-              "Player.Update terrain hook unavailable");
+              "Player.UpdateBiomes terrain hook unavailable");
 }
 
 static void init_mod(kernel_mod_handle_t* handle) {
@@ -3702,7 +3688,7 @@ static void init_mod(kernel_mod_handle_t* handle) {
     }
     patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
     if (player_type && patchlib_is_valid(player_type)) {
-        discover_player_update_api(player_type);
+        discover_player_biomes_api(player_type);
     }
     (void)elite_should_spawn;
     (void)make_profile;
@@ -3788,9 +3774,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090203,
+    .version_code = 2026090204,
     .api_version = 1,
-    .version = "1.3.7"
+    .version = "1.3.8"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
