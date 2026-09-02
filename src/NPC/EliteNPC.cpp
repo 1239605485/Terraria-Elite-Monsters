@@ -1,11 +1,14 @@
 #include "EliteNPC.h"
 #include "../Core/HookManager.h"
 #include "../Core/ModuleRegistry.h"
+#include "mod_logger.h"
 
 #include <cstdlib>
 
 static const em_game_api_t *g_api = nullptr;
 static bool g_enabled = false;
+static uint32_t g_night_hunt_log_count = 0;
+static const int k_spawn_chance_percent_test = 100;
 
 static int32_t scaled_i32(int32_t value, float multiplier) {
     double result = (double)value * (double)multiplier;
@@ -30,6 +33,7 @@ static bool excluded_npc(patch_handle_t instance) {
 
 void em_elite_npc_initialize(const em_game_api_t *api) {
     g_api = api;
+    g_night_hunt_log_count = 0;
     g_enabled = api &&
                 em_field_valid(api->npc_type_field, PATCH_INT32) &&
                 em_field_valid(api->npc_life, PATCH_INT32) &&
@@ -60,7 +64,7 @@ void em_elite_npc_postfix(patch_handle_t instance, void **args, void *result,
         npc_type <= 0) {
         return;
     }
-    if ((std::rand() % 100) >= 20) return;
+    if ((std::rand() % 100) >= k_spawn_chance_percent_test) return;
 
     int32_t life = 0;
     int32_t life_max = 0;
@@ -84,6 +88,13 @@ void em_elite_npc_postfix(patch_handle_t instance, void **args, void *result,
         em_static_field_read_bool(g_api->main_day_time, &day_time) &&
         !day_time) {
         damage_multiplier *= 1.25f;
+        if (g_night_hunt_log_count < 3 && mod_logger_write) {
+            mod_logger_write(MOD_LOG_LEVEL_INFO, "EliteMonsters.NPC",
+                             "Night Hunt applied: damage_multiplier=%.2f test_mode=%d",
+                             (double)damage_multiplier,
+                             em_world_rule_night_hunt_test_mode() ? 1 : 0);
+            ++g_night_hunt_log_count;
+        }
     }
     em_field_write_i32(g_api->npc_damage, instance,
                        scaled_i32(damage, damage_multiplier));

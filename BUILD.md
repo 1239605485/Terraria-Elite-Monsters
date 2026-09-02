@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha5-passive-rule-batch1-fix 第一批世界规则效果
+# EliteMonsters 2.0.0-alpha5-passive-rule-batch1-test-100spawn 夜行猎杀测试版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -52,7 +52,7 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha5-passive-rule-batch1-fix installs the minimal NPC `SetDefaults` hook plus
+Version 2.0.0-alpha5-passive-rule-batch1-test-100spawn installs the minimal NPC `SetDefaults` hook plus
 one signature-checked `Main.Update` hook for the passive WorldRule state layer.
 It additionally installs one signature-checked `Player.Update` hook for read-only
 Zone state logging; no terrain rule effect is executed.

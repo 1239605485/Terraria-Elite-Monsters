@@ -14,6 +14,7 @@ void em_world_rule_shutdown(void);
 bool em_world_rule_enabled(void);
 void em_world_rule_set_hook_installed(bool installed);
 bool em_world_rule_active(int rule_id);
+bool em_world_rule_night_hunt_test_mode(void);
 void em_world_rule_update(patch_handle_t instance, void **args, void *result,
                           const patch_method_signature_t *sig_info);
 void em_terrain_detector_initialize(const em_game_api_t *api);

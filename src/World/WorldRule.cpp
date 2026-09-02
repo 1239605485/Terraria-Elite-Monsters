@@ -19,6 +19,7 @@ enum {
 };
 
 enum { WORLD_RULE_NIGHT_HUNT = 1 };
+static const bool k_night_hunt_test_mode = true;
 
 static const char *const g_world_rule_names[WORLD_RULE_COUNT] = {
     "裂变回响", "夜行猎杀", "精英弹幕", "百杀敌潮", "Boss狂暴",
@@ -120,6 +121,9 @@ void em_world_rule_set_hook_installed(bool installed) {
 bool em_world_rule_enabled(void) { return g_enabled; }
 
 bool em_world_rule_active(int rule_id) {
+    if (k_night_hunt_test_mode && rule_id == WORLD_RULE_NIGHT_HUNT) {
+        return true;
+    }
     if (!g_world_active || !g_rules_initialized ||
         rule_id < 0 || rule_id >= WORLD_RULE_COUNT) {
         return false;
@@ -128,6 +132,10 @@ bool em_world_rule_active(int rule_id) {
         if (g_active_rules[i] == rule_id) return true;
     }
     return false;
+}
+
+bool em_world_rule_night_hunt_test_mode(void) {
+    return k_night_hunt_test_mode;
 }
 
 void em_world_rule_update(patch_handle_t instance, void **args, void *result,
