@@ -1,0 +1,22 @@
+{
+  "pkgId": "eternal.future.elitemonsters",
+  "name": "Elite Monsters（分级精英怪）",
+  "version": "2.0.0-alpha1",
+  "versionCode": 2026090301,
+  "icon": "icon.png",
+  "author": "liuxin",
+  "brieflyDescribe": "模块化稳定基线：仅启用基础精英怪功能。作者：liuxin。",
+  "description": "2.0.0-alpha1 是模块化重构的稳定基线。代码按 Core、NPC、World、Boss、Event、UI 拆分；本阶段只启用 Core 和基础 NPC 属性增强，世界规则、地形检测、播报、Boss、随机事件和奖励模块默认关闭，待逐项验证后再恢复。",
+  "features": [],
+  "sizeCategory": "TINY",
+  "targetGameVersion": "1.4.5.6.4",
+  "minGameVersion": "1.4.4.0",
+  "maxGameVersion": "1.4.5.6.4",
+  "support": {"android": {"arm64": true, "arm": false, "x64": false, "x86": false}},
+  "dependence": [],
+  "conflicts": [],
+  "stableVerified": false,
+  "experimental": true,
+  "deprecated": false,
+  "hasExtendedContent": true
+}

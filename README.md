@@ -1,4 +1,14 @@
-# Elite Monsters（正式版）
+# Elite Monsters
+
+## 当前版本：2.0.0-alpha1 模块化稳定基线
+
+当前交付物是进入世界稳定性验证版。它只启用 Core 和基础 NPC 属性增强；世界规则、
+地形检测、聊天播报、Boss、AI、随机事件、奖励和投射物均暂时关闭。旧版 1.3.x 的
+完整功能说明保留在下文，不能视为本版本已经启用的功能。
+
+新的源码按 `src/Core`、`src/NPC`、`src/World`、`src/Boss`、`src/Event`、`src/UI`
+划分；`EliteMonsters/mod.c` 只作迁移参考，不参与 CMake 编译。详见
+`MODULAR_REFACTOR.md` 和 `BUILD.md`。
 
 ## 1.3.6 更新
 

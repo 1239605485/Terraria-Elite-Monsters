@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("Terraria-KernelLoader-Mods")
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include_directories(${CMAKE_SOURCE_DIR}/mod-api)
 macro(add_terraria_mod MOD_NAME)
   add_library(${MOD_NAME} SHARED ${CMAKE_SOURCE_DIR}/mod-api/tefkernel/tef_api_imp.c ${ARGN})
@@ -13,5 +15,8 @@ macro(add_terraria_mod MOD_NAME)
   endif()
   set_target_properties(${MOD_NAME} PROPERTIES OUTPUT_NAME "${MOD_NAME}.${_sys}.${_arch}")
   target_include_directories(${MOD_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/mod-api)
+  target_compile_options(${MOD_NAME} PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 endmacro()
 add_subdirectory(EliteMonsters)

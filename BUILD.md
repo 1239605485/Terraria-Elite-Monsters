@@ -1,4 +1,17 @@
-# EliteMonsters 1.4.0 正式版（liuxin 双层变异规则版）
+# EliteMonsters 2.0.0-alpha1 模块化稳定基线
+
+本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
+参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
+实际编译入口位于 `src/`。
+
+## 当前启用范围
+
+当前只启用 Core 和基础 NPC 属性增强：普通敌怪有 20% 概率获得生命 ×1.4、
+伤害 ×1.15、防御 +4；友好 NPC、城镇 NPC 和 Boss 会跳过。世界规则、地形检测、
+聊天播报、Boss、AI、随机事件、奖励和投射物模块均暂时关闭，待真实 Android
+设备完成启动、进入世界、退出世界、再次进入世界测试后逐项恢复。
+
+下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha1 已启用的功能。
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -38,9 +51,10 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 1.4.0 does not install any Player method hook or invoke the
-`Main.LocalPlayer` getter. It uses the verified Main.Update notification hook
-and the existing indexed-player array path.
+Version 2.0.0-alpha1 only installs the minimal NPC `SetDefaults` hook. It does
+not install Main, Player, AI, terrain, notice, boss, event, reward, or other
+high-frequency hooks. This is intentional: each later module will be enabled
+and tested independently.
 
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
