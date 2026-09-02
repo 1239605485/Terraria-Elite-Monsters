@@ -26,6 +26,8 @@ static size_t g_setdefaults_hook_count = 0;
 static patch_hook_id_t g_main_update_hooks[1] = {};
 static size_t g_main_update_hook_count = 0;
 static patch_handle_t g_main_new_text_method = nullptr;
+static int g_main_new_text_arg_count = 0;
+static patch_type_t g_main_new_text_color_type = PATCH_UINT8;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -65,12 +67,27 @@ bool em_main_text_available(void) {
            patchlib_is_valid(g_main_new_text_method);
 }
 
-bool em_main_text_show(const char *text) {
+bool em_main_text_show(const char *text, uint8_t red, uint8_t green,
+                       uint8_t blue) {
     if (!text || !text[0] || !em_main_text_available()) return false;
 
     patch_handle_t message = patchlib_string_create(text);
     if (!message || !patchlib_is_valid(message)) return false;
-    void *args[1] = {&message};
+    void *args[4] = {&message, nullptr, nullptr, nullptr};
+    int32_t red_i = red;
+    int32_t green_i = green;
+    int32_t blue_i = blue;
+    if (g_main_new_text_arg_count == 4) {
+        if (g_main_new_text_color_type == PATCH_INT32) {
+            args[1] = &red_i;
+            args[2] = &green_i;
+            args[3] = &blue_i;
+        } else {
+            args[1] = &red;
+            args[2] = &green;
+            args[3] = &blue;
+        }
+    }
     uint64_t ignored_return = 0;
     bool invoked = patchlib_method_invoke_args(
         g_main_new_text_method, PATCH_NULL, &ignored_return, args);
@@ -142,29 +159,59 @@ static void cache_main_api(void) {
         g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
     }
 
-    patch_handle_t method = patchlib_type_get_method_by_param_count(
-        main_type, "NewText", 1);
-    if (method && patchlib_is_valid(method)) {
+    const int parameter_counts[] = {4, 1};
+    for (int parameter_count : parameter_counts) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            main_type, "NewText", parameter_count);
+        if (!method || !patchlib_is_valid(method)) continue;
+
         patch_method_signature_t signature = {};
-        if (patchlib_method_get_signature(method, &signature)) {
-            patch_type_t *argument_type =
-                static_cast<patch_type_t *>(
-                    tefstd_vector_at(&signature.arg_types, 0));
-            bool text_argument =
-                tefstd_vector_size(&signature.arg_types) == 1 &&
-                argument_type &&
-                (*argument_type == PATCH_OBJECT ||
-                 *argument_type == PATCH_POINTER);
-            bool supported = !signature.is_instance &&
-                             signature.return_type == PATCH_VOID &&
-                             text_argument;
-            if (supported) g_main_new_text_method = method;
-            patchlib_method_signature_free(&signature);
-            if (supported) {
-                EM_LOG(MOD_LOG_LEVEL_INFO,
-                       "Main.NewText notice API available: params=1");
-                return;
+        if (!patchlib_method_get_signature(method, &signature)) continue;
+        size_t argument_count = tefstd_vector_size(&signature.arg_types);
+        patch_type_t *argument_type = nullptr;
+        if (argument_count > 0) {
+            argument_type = static_cast<patch_type_t *>(
+                tefstd_vector_at(&signature.arg_types, 0));
+        }
+        bool text_argument =
+            argument_type && (*argument_type == PATCH_OBJECT ||
+                              *argument_type == PATCH_POINTER);
+        bool supported = !signature.is_instance &&
+                         signature.return_type == PATCH_VOID &&
+                         ((parameter_count == 1 && argument_count == 1 &&
+                           text_argument) ||
+                          (parameter_count == 4 && argument_count == 4 &&
+                           text_argument));
+        bool color_supported = false;
+        bool int_color = false;
+        if (supported && parameter_count == 4) {
+            bool byte_color = true;
+            int_color = true;
+            for (size_t color_index = 1; color_index < 4; ++color_index) {
+                patch_type_t *color_type = static_cast<patch_type_t *>(
+                    tefstd_vector_at(&signature.arg_types, color_index));
+                byte_color = byte_color && color_type &&
+                             *color_type == PATCH_UINT8;
+                int_color = int_color && color_type &&
+                            *color_type == PATCH_INT32;
             }
+            color_supported = byte_color || int_color;
+            supported = supported && color_supported;
+        }
+        if (supported) {
+            g_main_new_text_method = method;
+            g_main_new_text_arg_count = parameter_count;
+            g_main_new_text_color_type =
+                (parameter_count == 4 && color_supported && int_color)
+                    ? PATCH_INT32
+                    : PATCH_UINT8;
+        }
+        patchlib_method_signature_free(&signature);
+        if (supported) {
+            EM_LOG(MOD_LOG_LEVEL_INFO,
+                   "Main.NewText notice API available: params=%d colorType=%d",
+                   parameter_count, (int)g_main_new_text_color_type);
+            return;
         }
     }
     EM_LOG(MOD_LOG_LEVEL_WARNING,
@@ -331,12 +378,14 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
     }
     g_main_update_hook_count = 0;
     g_main_new_text_method = nullptr;
+    g_main_new_text_arg_count = 0;
+    g_main_new_text_color_type = PATCH_UINT8;
     std::memset(&g_api, 0, sizeof(g_api));
     EM_LOG(MOD_LOG_LEVEL_INFO, "Modular baseline unloaded");
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090401, 1, "2.0.0-alpha4"
+    "eternal.future.elitemonsters", 2026090402, 1, "2.0.0-alpha4.1"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

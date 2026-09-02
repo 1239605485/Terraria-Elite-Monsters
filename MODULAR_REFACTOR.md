@@ -1,6 +1,6 @@
 # 模块化重构说明
 
-## 当前阶段：2.0.0-alpha4
+## 当前阶段：2.0.0-alpha4.1
 
 本阶段以原版工程为迁移参考，旧版单文件 `EliteMonsters/mod.c` 保留但不参与
 CMake 编译。新的编译入口是 `src/`。
@@ -19,6 +19,8 @@ alpha3.2 进一步将 `Main.Update` Hook 发现与这两个字段的可用性解
 单独验证生命周期 Hook；字段不可用时只暂停 WorldRule 状态更新。
 alpha4 新增一次性 `Main.NewText` 测试播报，使用签名校验后的单参数文本接口；
 播报不可用时自动跳过，不影响 NPC 和 WorldRule Hook。
+alpha4.1 优先发现并调用四参数 `Main.NewText` 文本接口，并回退到单参数接口；
+颜色参数严格按 `byte` 或 `int` 签名传递。
 
 暂时不启用：
 

@@ -13,5 +13,5 @@ bool em_notice_enabled(void) { return g_enabled; }
 
 bool em_notice_show(const char *text) {
     if (!g_enabled) return false;
-    return em_main_text_show(text);
+    return em_main_text_show(text, 140, 255, 170);
 }

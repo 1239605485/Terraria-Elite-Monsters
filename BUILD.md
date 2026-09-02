@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha4 模块化增量验证版
+# EliteMonsters 2.0.0-alpha4.1 模块化增量验证版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -52,7 +52,7 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha4 installs the minimal NPC `SetDefaults` hook plus one
+Version 2.0.0-alpha4.1 installs the minimal NPC `SetDefaults` hook plus one
 signature-checked `Main.Update` hook for the passive WorldRule state layer. It
 also performs one signature-checked `Main.NewText` invocation when the world
 session is first detected. The notice is a test message only. It does not
@@ -63,8 +63,9 @@ The alpha3.1 correction reads `Main.gameMenu` as a validated static boolean
 field; `Main.worldID` remains a validated static 32-bit integer field.
 Alpha3.2 discovers the lifecycle hook from `Terraria.Main` independently of
 those fields, then validates the fields inside the callback.
-Alpha4 discovers a single-argument text overload before module initialization;
-the UI module remains disabled if that overload is unavailable.
+Alpha4.1 discovers the four-argument text overload first and falls back to the
+single-argument overload. Color arguments are passed according to the validated
+signature type; the UI module remains disabled if neither overload is safe.
 
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
