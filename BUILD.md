@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha4.3 模块化增量验证版
+# EliteMonsters 2.0.0-alpha4.3-safe-noui 模块化安全回退版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -52,26 +52,20 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha4.3 installs the minimal NPC `SetDefaults` hook plus one
-signature-checked `Main.Update` hook for the passive WorldRule state layer. It
-also performs one signature-checked `Main.NewText` invocation when the world
-session is first detected. The notice is a test message only. It does not
-install Player, AI, terrain, boss, event, reward, or other feature hooks. This
-is intentional: each later module will be enabled and tested independently.
-Alpha4.3 prefers the one-argument `Main.NewText` overload and retains a
-signature-checked four-argument fallback. The first `Main.Update` callback also
-emits one UI-only probe message, independent of world fields, to isolate the
-remaining notice-path failure without changing gameplay.
+Version 2.0.0-alpha4.3-safe-noui installs the minimal NPC `SetDefaults` hook plus
+one signature-checked `Main.Update` hook for the passive WorldRule state layer.
+The entire UI/NewText path is disabled: startup does not discover `Main.NewText`,
+and the update callback emits no probe or world-entry message. It does not install
+Player, AI, terrain, boss, event, reward, or other feature hooks. This is
+intentional: each later module will be enabled and tested independently.
 
 The alpha3.1 correction reads `Main.gameMenu` as a validated static boolean
 field; `Main.worldID` remains a validated static 32-bit integer field.
 Alpha3.2 discovers the lifecycle hook from `Terraria.Main` independently of
 those fields, then validates the fields inside the callback.
-Alpha4.2 enumerates all `Terraria.Main` methods when parameter-count lookup is
-insufficient, logs each `NewText` candidate signature, and selects a safe
-four-argument or single-argument overload. Color arguments are passed according
-to the validated signature type; the UI module remains disabled if neither
-overload is safe.
+The earlier alpha4.x `Main.NewText` overload discovery and invocation experiment
+is retained only in the historical notes/old reference source; it is not part of
+the active CMake sources in this safe rollback.
 
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make

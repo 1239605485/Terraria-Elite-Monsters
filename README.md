@@ -1,23 +1,18 @@
 # Elite Monsters
 
-## 当前版本：2.0.0-alpha4.3 模块化增量验证版
+## 当前版本：2.0.0-alpha4.3-safe-noui 模块化安全回退版
 
 当前交付物在 alpha2 稳定底座上只新增被动 WorldRule 状态层：进入世界后按
-`Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。地形检测、聊天
-播报、Boss、AI、随机事件、奖励和投射物均暂时关闭。旧版 1.3.x 的完整功能说明保留
+`Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。UI/NewText、地形
+检测、Boss、AI、随机事件、奖励和投射物均暂时关闭。旧版 1.3.x 的完整功能说明保留
 在下文，不能视为本版本已经启用的功能。alpha2 修复了 NPC 类型句柄误作实例字段导致
 进入游戏闪退的问题。
 
 alpha3.1 修正了 `Main.gameMenu` 必须按 `bool` 静态字段读取的问题。
 alpha3.2 将 `Main.Update` Hook 的安装与字段可用性分开，先验证生命周期 Hook，
 再在回调中验证 `Main.gameMenu` 和 `Main.worldID`。
-alpha4 新增一次性 `Main.NewText` 测试播报，用于验证 WorldRule 首次进入世界的
-回调链路；不执行任何规则效果。
-alpha4.1 优先使用四参数 `Main.NewText`，并回退到单参数接口，调用参数严格匹配
-实际签名。
-alpha4.2 在参数数量查找不足时枚举 `Main` 全部 `NewText` 候选方法并记录完整签名。
-alpha4.3 优先调用单参数文本接口，并保留经过签名校验的四参数接口作为回退；
-`Main.Update` 首次回调会发送一次不影响游戏的 UI 探针，用于区分回调链路和世界字段问题。
+alpha4～alpha4.3 的 `Main.NewText` 与 UI 探针实验已安全回退：当前版本既不在启动时
+发现 `Main.NewText`，也不在 `Main.Update` 中执行任何 UI 调用。
 
 新的源码按 `src/Core`、`src/NPC`、`src/World`、`src/Boss`、`src/Event`、`src/UI`
 划分；`EliteMonsters/mod.c` 只作迁移参考，不参与 CMake 编译。详见

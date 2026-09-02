@@ -1,6 +1,6 @@
 # 模块化重构说明
 
-## 当前阶段：2.0.0-alpha4.3
+## 当前阶段：2.0.0-alpha4.3-safe-noui
 
 本阶段以原版工程为迁移参考，旧版单文件 `EliteMonsters/mod.c` 保留但不参与
 CMake 编译。新的编译入口是 `src/`。
@@ -11,18 +11,14 @@ CMake 编译。新的编译入口是 `src/`。
 - `NPC/EliteNPC.cpp`：只处理普通 NPC 的基础精英属性。
 - `World/WorldRule.cpp`：只检测世界生命周期，并按 `Main.worldID` 确定性抽取
   3～5 条规则写入模块状态和日志；规则效果尚未启用。
-- `UI/Notice.cpp`：只在 WorldRule 首次确认进入世界时显示一条测试文本；不播报
-  规则内容，不执行游戏效果。
+- `UI/Notice.cpp`：保留模块接口但完全禁用；本阶段不发现、不创建、不调用
+  `Main.NewText` 或其他 UI 方法。
 
 alpha3.1 修正 `Main.gameMenu` 按 `bool` 字段读取的问题；该字段不是 `int32`。
 alpha3.2 进一步将 `Main.Update` Hook 发现与这两个字段的可用性解耦，便于
 单独验证生命周期 Hook；字段不可用时只暂停 WorldRule 状态更新。
-alpha4 新增一次性 `Main.NewText` 测试播报，使用签名校验后的单参数文本接口；
-播报不可用时自动跳过，不影响 NPC 和 WorldRule Hook。
-alpha4.1 优先发现并调用四参数 `Main.NewText` 文本接口，并回退到单参数接口；
-颜色参数严格按 `byte` 或 `int` 签名传递。
-alpha4.2 在参数数量查找失败时枚举 `Terraria.Main` 的全部方法，输出候选完整签名，
-再按安全签名选择 `NewText` 重载。
+alpha4～alpha4.3 的 `Main.NewText` 实验在本次闪退排查中回退；启动时不再枚举
+`Main.NewText`，`Main.Update` 回调也不发送 UI 探针或世界进入文本。
 
 暂时不启用：
 
