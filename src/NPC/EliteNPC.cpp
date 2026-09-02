@@ -1,5 +1,6 @@
 #include "EliteNPC.h"
 #include "../Core/HookManager.h"
+#include "../Core/ModuleRegistry.h"
 
 #include <cstdlib>
 

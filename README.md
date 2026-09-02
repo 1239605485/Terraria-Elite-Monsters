@@ -1,6 +1,6 @@
 # Elite Monsters
 
-## 当前版本：2.0.0-alpha5-passive-rule-batch1 第一批世界规则效果
+## 当前版本：2.0.0-alpha5-passive-rule-batch1-fix 第一批世界规则效果
 
 当前交付物在 alpha2 稳定底座上新增被动 WorldRule 状态层和只读地形状态层：进入世界后按
 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。UI/NewText、地形

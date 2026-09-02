@@ -1,8 +1,8 @@
 {
   "pkgId": "eternal.future.elitemonsters",
   "name": "Elite Monsters（分级精英怪）",
-  "version": "2.0.0-alpha5-passive-rule-batch1",
-  "versionCode": 2026090412,
+  "version": "2.0.0-alpha5-passive-rule-batch1-fix",
+  "versionCode": 2026090413,
   "icon": "icon.png",
   "author": "liuxin",
   "brieflyDescribe": "第一批世界规则效果：夜行猎杀被动伤害。作者：liuxin。",

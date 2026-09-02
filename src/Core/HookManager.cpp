@@ -399,8 +399,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090412, 1,
-    "2.0.0-alpha5-passive-rule-batch1"
+    "eternal.future.elitemonsters", 2026090413, 1,
+    "2.0.0-alpha5-passive-rule-batch1-fix"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
