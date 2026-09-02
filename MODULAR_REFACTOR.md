@@ -1,6 +1,6 @@
 # 模块化重构说明
 
-## 当前阶段：2.0.0-alpha3
+## 当前阶段：2.0.0-alpha3.1
 
 本阶段以原版工程为迁移参考，旧版单文件 `EliteMonsters/mod.c` 保留但不参与
 CMake 编译。新的编译入口是 `src/`。
@@ -11,6 +11,8 @@ CMake 编译。新的编译入口是 `src/`。
 - `NPC/EliteNPC.cpp`：只处理普通 NPC 的基础精英属性。
 - `World/WorldRule.cpp`：只检测世界生命周期，并按 `Main.worldID` 确定性抽取
   3～5 条规则写入模块状态和日志；规则效果尚未启用。
+
+alpha3.1 修正 `Main.gameMenu` 按 `bool` 字段读取的问题；该字段不是 `int32`。
 
 暂时不启用：
 

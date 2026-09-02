@@ -52,6 +52,12 @@ bool em_static_field_read_i32(patch_handle_t field, int32_t *value) {
     return true;
 }
 
+bool em_static_field_read_bool(patch_handle_t field, bool *value) {
+    if (!value || !em_static_field_valid(field, PATCH_BOOL)) return false;
+    patchlib_field_get_value(field, PATCH_NULL, value);
+    return true;
+}
+
 bool em_field_read_bool(patch_handle_t field, patch_handle_t instance,
                         bool *value) {
     if (!value || !em_field_valid(field, PATCH_BOOL)) return false;
@@ -278,7 +284,7 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090303, 1, "2.0.0-alpha3"
+    "eternal.future.elitemonsters", 2026090304, 1, "2.0.0-alpha3.1"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

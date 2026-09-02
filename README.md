@@ -1,12 +1,14 @@
 # Elite Monsters
 
-## 当前版本：2.0.0-alpha3 模块化增量验证版
+## 当前版本：2.0.0-alpha3.1 模块化增量验证修正版
 
 当前交付物在 alpha2 稳定底座上只新增被动 WorldRule 状态层：进入世界后按
 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。地形检测、聊天
 播报、Boss、AI、随机事件、奖励和投射物均暂时关闭。旧版 1.3.x 的完整功能说明保留
 在下文，不能视为本版本已经启用的功能。alpha2 修复了 NPC 类型句柄误作实例字段导致
 进入游戏闪退的问题。
+
+alpha3.1 修正了 `Main.gameMenu` 必须按 `bool` 静态字段读取的问题。
 
 新的源码按 `src/Core`、`src/NPC`、`src/World`、`src/Boss`、`src/Event`、`src/UI`
 划分；`EliteMonsters/mod.c` 只作迁移参考，不参与 CMake 编译。详见

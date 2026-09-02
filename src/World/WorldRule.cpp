@@ -78,7 +78,7 @@ static void initialize_rules(uint32_t world_identity) {
 void em_world_rule_initialize(const em_game_api_t *api) {
     g_api = api;
     g_enabled = api &&
-                em_static_field_valid(api->main_game_menu, PATCH_INT32) &&
+                em_static_field_valid(api->main_game_menu, PATCH_BOOL) &&
                 em_static_field_valid(api->main_world_id, PATCH_INT32);
     g_hook_installed = false;
     g_world_active = false;
@@ -119,14 +119,14 @@ void em_world_rule_update(patch_handle_t instance, void **args, void *result,
     (void)sig_info;
     if (!g_enabled || !g_hook_installed || !g_api) return;
 
-    int32_t game_menu = 1;
+    bool game_menu = true;
     int32_t world_id = 0;
-    if (!em_static_field_read_i32(g_api->main_game_menu, &game_menu) ||
+    if (!em_static_field_read_bool(g_api->main_game_menu, &game_menu) ||
         !em_static_field_read_i32(g_api->main_world_id, &world_id)) {
         return;
     }
 
-    bool in_world = game_menu == 0;
+    bool in_world = !game_menu;
     if (!in_world) {
         if (g_world_active) reset_world_session();
         return;
