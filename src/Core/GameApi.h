@@ -13,7 +13,8 @@ extern "C" {
 #endif
 
 typedef struct em_game_api_t {
-    patch_handle_t npc_type;
+    patch_handle_t npc_type_class;
+    patch_handle_t npc_type_field;
     patch_handle_t npc_friendly;
     patch_handle_t npc_town;
     patch_handle_t npc_boss;

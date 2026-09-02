@@ -30,6 +30,7 @@ static bool excluded_npc(patch_handle_t instance) {
 void em_elite_npc_initialize(const em_game_api_t *api) {
     g_api = api;
     g_enabled = api &&
+                em_field_valid(api->npc_type_field, PATCH_INT32) &&
                 em_field_valid(api->npc_life, PATCH_INT32) &&
                 em_field_valid(api->npc_life_max, PATCH_INT32) &&
                 em_field_valid(api->npc_damage, PATCH_INT32) &&
@@ -54,7 +55,7 @@ void em_elite_npc_postfix(patch_handle_t instance, void **args, void *result,
     if (excluded_npc(instance)) return;
 
     int32_t npc_type = 0;
-    if (!em_field_read_i32(g_api->npc_type, instance, &npc_type) ||
+    if (!em_field_read_i32(g_api->npc_type_field, instance, &npc_type) ||
         npc_type <= 0) {
         return;
     }

@@ -67,7 +67,8 @@ bool em_field_write_float(patch_handle_t field, patch_handle_t instance,
 }
 
 static void cache_npc_api(patch_handle_t npc_type) {
-    g_api.npc_type = npc_type;
+    g_api.npc_type_class = npc_type;
+    g_api.npc_type_field = patchlib_type_get_field(npc_type, "type");
     g_api.npc_friendly = patchlib_type_get_field(npc_type, "friendly");
     g_api.npc_town = patchlib_type_get_field(npc_type, "townNPC");
     g_api.npc_boss = patchlib_type_get_field(npc_type, "boss");
@@ -173,7 +174,7 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090301, 1, "2.0.0-alpha1"
+    "eternal.future.elitemonsters", 2026090302, 1, "2.0.0-alpha2"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha1 模块化稳定基线
+# EliteMonsters 2.0.0-alpha2 模块化稳定基线修复版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -11,7 +11,7 @@
 聊天播报、Boss、AI、随机事件、奖励和投射物模块均暂时关闭，待真实 Android
 设备完成启动、进入世界、退出世界、再次进入世界测试后逐项恢复。
 
-下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha1 已启用的功能。
+下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha2 已启用的功能。
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
