@@ -471,8 +471,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090409, 1,
-    "2.0.0-alpha4.3-safe-noui-terrain-notice-test"
+    "eternal.future.elitemonsters", 2026090410, 1,
+    "2.0.0-alpha4.3-safe-noui-terrain-notice-probe"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

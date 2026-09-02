@@ -1,6 +1,6 @@
 # 模块化重构说明
 
-## 当前阶段：2.0.0-alpha4.3-safe-noui-terrain-notice-test
+## 当前阶段：2.0.0-alpha4.3-safe-noui-terrain-notice-probe
 
 本阶段以原版工程为迁移参考，旧版单文件 `EliteMonsters/mod.c` 保留但不参与
 CMake 编译。新的编译入口是 `src/`。
