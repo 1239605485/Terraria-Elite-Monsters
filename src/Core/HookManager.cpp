@@ -22,6 +22,8 @@ extern "C" void (*mod_logger_write)(mod_log_level_t level, const char *tag,
 static em_game_api_t g_api = {};
 static patch_hook_id_t g_setdefaults_hooks[8] = {};
 static size_t g_setdefaults_hook_count = 0;
+static patch_hook_id_t g_main_update_hooks[1] = {};
+static size_t g_main_update_hook_count = 0;
 
 const em_game_api_t *em_game_api(void) { return &g_api; }
 
@@ -31,10 +33,22 @@ bool em_field_valid(patch_handle_t field, patch_type_t type) {
            patchlib_field_get_type(field) == type;
 }
 
+bool em_static_field_valid(patch_handle_t field, patch_type_t type) {
+    return field && patchlib_is_valid(field) &&
+           patchlib_field_is_static(field) &&
+           patchlib_field_get_type(field) == type;
+}
+
 bool em_field_read_i32(patch_handle_t field, patch_handle_t instance,
                        int32_t *value) {
     if (!value || !em_field_valid(field, PATCH_INT32)) return false;
     patchlib_field_get_value(field, instance, value);
+    return true;
+}
+
+bool em_static_field_read_i32(patch_handle_t field, int32_t *value) {
+    if (!value || !em_static_field_valid(field, PATCH_INT32)) return false;
+    patchlib_field_get_value(field, PATCH_NULL, value);
     return true;
 }
 
@@ -79,6 +93,83 @@ static void cache_npc_api(patch_handle_t npc_type) {
     g_api.npc_scale = patchlib_type_get_field(npc_type, "scale");
     g_api.npc_knockback_resist =
         patchlib_type_get_field(npc_type, "knockBackResist");
+}
+
+static void cache_main_api(void) {
+    patch_handle_t main_type =
+        patchlib_type_get_type("Terraria", "Main");
+    if (!main_type || !patchlib_is_valid(main_type)) {
+        EM_LOG(MOD_LOG_LEVEL_WARNING, "Terraria.Main unavailable");
+        return;
+    }
+
+    g_api.main_type_class = main_type;
+    g_api.main_game_menu = patchlib_type_get_field(main_type, "gameMenu");
+    if (!g_api.main_game_menu || !patchlib_is_valid(g_api.main_game_menu)) {
+        g_api.main_game_menu = patchlib_type_get_field(main_type, "GameMenu");
+    }
+    g_api.main_world_id = patchlib_type_get_field(main_type, "worldID");
+    if (!g_api.main_world_id || !patchlib_is_valid(g_api.main_world_id)) {
+        g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
+    }
+}
+
+static bool install_main_update_hook(patch_handle_t method,
+                                     const char *name) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_main_update_hook_count >= 1) {
+        return false;
+    }
+
+    patch_method_signature_t signature = {};
+    if (!patchlib_method_get_signature(method, &signature)) return false;
+    bool supported = signature.is_instance &&
+                     signature.return_type == PATCH_VOID &&
+                     tefstd_vector_size(&signature.arg_types) <= 2;
+    if (!supported) {
+        patchlib_method_signature_free(&signature);
+        return false;
+    }
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, nullptr, em_world_rule_update);
+    if (hook_id == PATCH_HOOK_INVALID_ID) {
+        patchlib_method_signature_free(&signature);
+        return false;
+    }
+
+    g_main_update_hooks[g_main_update_hook_count++] = hook_id;
+    EM_LOG(MOD_LOG_LEVEL_INFO,
+           "WorldRule Main update hook installed: name=%s params=%d id=%d",
+           name, (int)tefstd_vector_size(&signature.arg_types), (int)hook_id);
+    patchlib_method_signature_free(&signature);
+    return true;
+}
+
+static void discover_main_update_hook(void) {
+    if (!em_world_rule_enabled()) return;
+
+    patch_handle_t main_type = g_api.main_type_class;
+    const char *names[] = {"Update", "DoUpdate"};
+    for (size_t name_index = 0; name_index < 2; ++name_index) {
+        for (int parameter_count = 0; parameter_count <= 2;
+             ++parameter_count) {
+            patch_handle_t method = patchlib_type_get_method_by_param_count(
+                main_type, names[name_index], parameter_count);
+            if (install_main_update_hook(method, names[name_index])) {
+                em_world_rule_set_hook_installed(true);
+                return;
+            }
+        }
+    }
+
+    patch_handle_t fallback = patchlib_type_get_method(main_type, "Update");
+    if (install_main_update_hook(fallback, "Update")) {
+        em_world_rule_set_hook_installed(true);
+        return;
+    }
+
+    em_world_rule_set_hook_installed(false);
 }
 
 static void discover_npc_hooks(patch_handle_t npc_type) {
@@ -151,6 +242,7 @@ static void init_mod(kernel_mod_handle_t *handle) {
     }
 
     cache_npc_api(npc_type);
+    cache_main_api();
     initialize_modules();
     if (em_elite_npc_enabled()) {
         discover_npc_hooks(npc_type);
@@ -158,8 +250,16 @@ static void init_mod(kernel_mod_handle_t *handle) {
         EM_LOG(MOD_LOG_LEVEL_WARNING,
                "Modular NPC fields unavailable; NPC module disabled");
     }
-    EM_LOG(MOD_LOG_LEVEL_INFO,
-           "Modular baseline loaded: Core + NPC enabled; World/Boss/Event/UI disabled");
+    discover_main_update_hook();
+    if (em_world_rule_enabled()) {
+        EM_LOG(MOD_LOG_LEVEL_INFO,
+               "Modular baseline loaded: Core + NPC + passive WorldRule state; "
+               "Terrain/Boss/Event/UI disabled");
+    } else {
+        EM_LOG(MOD_LOG_LEVEL_INFO,
+               "Modular baseline loaded: Core + NPC enabled; WorldRule disabled; "
+               "Terrain/Boss/Event/UI disabled");
+    }
 }
 
 static void cleanup_mod(kernel_mod_handle_t *handle) {
@@ -169,12 +269,16 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
         patchlib_uninstall_hook(g_setdefaults_hooks[i]);
     }
     g_setdefaults_hook_count = 0;
+    for (size_t i = 0; i < g_main_update_hook_count; ++i) {
+        patchlib_uninstall_hook(g_main_update_hooks[i]);
+    }
+    g_main_update_hook_count = 0;
     std::memset(&g_api, 0, sizeof(g_api));
     EM_LOG(MOD_LOG_LEVEL_INFO, "Modular baseline unloaded");
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090302, 1, "2.0.0-alpha2"
+    "eternal.future.elitemonsters", 2026090303, 1, "2.0.0-alpha3"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

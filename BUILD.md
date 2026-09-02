@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha2 模块化稳定基线修复版
+# EliteMonsters 2.0.0-alpha3 模块化增量验证版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -6,12 +6,13 @@
 
 ## 当前启用范围
 
-当前只启用 Core 和基础 NPC 属性增强：普通敌怪有 20% 概率获得生命 ×1.4、
-伤害 ×1.15、防御 +4；友好 NPC、城镇 NPC 和 Boss 会跳过。世界规则、地形检测、
-聊天播报、Boss、AI、随机事件、奖励和投射物模块均暂时关闭，待真实 Android
-设备完成启动、进入世界、退出世界、再次进入世界测试后逐项恢复。
+当前启用 Core、基础 NPC 属性增强和被动 WorldRule 状态层：普通敌怪有 20% 概率
+获得生命 ×1.4、伤害 ×1.15、防御 +4；友好 NPC、城镇 NPC 和 Boss 会跳过。进入
+世界后，WorldRule 仅依据 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，不执行
+任何规则效果。地形检测、聊天播报、Boss、AI、随机事件、奖励和投射物模块均关闭，
+待真实 Android 设备完成启动、进入世界、退出世界、再次进入世界测试后逐项恢复。
 
-下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha2 已启用的功能。
+下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha3 已启用的功能。
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -51,10 +52,11 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha1 only installs the minimal NPC `SetDefaults` hook. It does
-not install Main, Player, AI, terrain, notice, boss, event, reward, or other
-high-frequency hooks. This is intentional: each later module will be enabled
-and tested independently.
+Version 2.0.0-alpha3 installs the minimal NPC `SetDefaults` hook plus one
+signature-checked `Main.Update` hook for the passive WorldRule state layer. It
+does not install Player, AI, terrain, notice, boss, event, reward, or other
+feature hooks. This is intentional: each later module will be enabled and
+tested independently.
 
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
