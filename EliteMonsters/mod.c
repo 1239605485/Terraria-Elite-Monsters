@@ -234,6 +234,9 @@ static int g_ai_method_token = -1;
 #define MAIN_UPDATE_HOOK_LIMIT 1
 static patch_hook_id_t g_main_update_hooks[MAIN_UPDATE_HOOK_LIMIT];
 static size_t g_main_update_hook_count = 0;
+#define PLAYER_UPDATE_HOOK_LIMIT 1
+static patch_hook_id_t g_player_update_hooks[PLAYER_UPDATE_HOOK_LIMIT];
+static size_t g_player_update_hook_count = 0;
 #define LOOT_HOOK_LIMIT 1
 static patch_hook_id_t g_loot_hooks[LOOT_HOOK_LIMIT];
 static size_t g_loot_hook_count = 0;
@@ -279,6 +282,7 @@ static bool game_text_notice(const char *text, uint8_t red, uint8_t green,
 #define MAX_RULE_SPAWNS_PER_TICK 4u
 
 static terrain_rule_t terrain_rule_for_player(int32_t player_index);
+static terrain_rule_t terrain_rule_for_player_instance(patch_handle_t player);
 
 /* Terraria keeps a fixed NPC object pool and reuses the same object pointer
  * for many different spawns.  State stored here therefore describes only the
@@ -1094,10 +1098,10 @@ static patch_handle_t zone_getter_for_field(patch_handle_t field) {
     return NULL;
 }
 
-static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
-    patch_handle_t player = NULL;
+static bool read_player_zone_flag_instance(patch_handle_t player,
+                                           patch_handle_t field) {
     bool value = false;
-    if (!get_player_instance(player_index, &player)) return false;
+    if (!player || !patchlib_is_valid(player)) return false;
     /* A backing field can exist but stay stale on some IL2CPP builds. If it
      * reads false, still try the property's getter before deciding that the
      * player is outside the biome. */
@@ -1107,6 +1111,12 @@ static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
     patch_handle_t getter = zone_getter_for_field(field);
     if (!getter || !patchlib_is_valid(getter)) return false;
     return patchlib_method_invoke_args(getter, player, &value, NULL) && value;
+}
+
+static bool read_player_zone_flag(int32_t player_index, patch_handle_t field) {
+    patch_handle_t player = NULL;
+    if (!get_player_instance(player_index, &player)) return false;
+    return read_player_zone_flag_instance(player, field);
 }
 
 static uint32_t hash_bytes(uint32_t hash, const unsigned char *bytes,
@@ -1298,32 +1308,44 @@ static void advance_world_rule_clock(void) {
 
 static terrain_rule_t terrain_rule_for_player(int32_t player_index) {
     if (player_index < 0) return TERRAIN_RULE_NONE;
-    bool underworld = read_player_zone_flag(
-        player_index, g_player_zone_underworld_field);
-    bool rock = read_player_zone_flag(player_index,
-                                      g_player_zone_rock_layer_field);
-    bool dirt = read_player_zone_flag(player_index,
-                                      g_player_zone_dirt_layer_field);
-    bool snow = read_player_zone_flag(player_index, g_player_zone_snow_field);
-    bool desert = read_player_zone_flag(player_index,
-                                        g_player_zone_desert_field);
-    bool jungle = read_player_zone_flag(player_index,
-                                        g_player_zone_jungle_field);
+    patch_handle_t player = NULL;
+    if (!get_player_instance(player_index, &player)) return TERRAIN_RULE_NONE;
+    return terrain_rule_for_player_instance(player);
+}
 
-    if (read_player_zone_flag(player_index, g_player_zone_temple_field)) {
+/* Player.Update runs on the actual Player object.  Use that object directly
+ * for terrain detection instead of requiring Main.player[] to be readable as
+ * an IL2CPP array.  The latter is exposed differently by different Android
+ * metadata builds and was the reason terrain notices stopped after the first
+ * global announcement. */
+static terrain_rule_t terrain_rule_for_player_instance(patch_handle_t player) {
+    if (!player || !patchlib_is_valid(player)) return TERRAIN_RULE_NONE;
+    bool underworld = read_player_zone_flag_instance(
+        player, g_player_zone_underworld_field);
+    bool rock = read_player_zone_flag_instance(player,
+                                               g_player_zone_rock_layer_field);
+    bool dirt = read_player_zone_flag_instance(player,
+                                               g_player_zone_dirt_layer_field);
+    bool snow = read_player_zone_flag_instance(player, g_player_zone_snow_field);
+    bool desert = read_player_zone_flag_instance(player,
+                                                 g_player_zone_desert_field);
+    bool jungle = read_player_zone_flag_instance(player,
+                                                 g_player_zone_jungle_field);
+
+    if (read_player_zone_flag_instance(player, g_player_zone_temple_field)) {
         return TERRAIN_RULE_TEMPLE;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_spider_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_spider_field)) {
         return TERRAIN_RULE_SPIDER;
     }
     if (underworld) return TERRAIN_RULE_UNDERWORLD;
-    if (read_player_zone_flag(player_index, g_player_zone_meteor_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_meteor_field)) {
         return TERRAIN_RULE_METEOR;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_sky_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_sky_field)) {
         return TERRAIN_RULE_SPACE;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_glowshroom_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_glowshroom_field)) {
         return TERRAIN_RULE_GLOWING_MUSHROOM;
     }
     if (snow && rock) return TERRAIN_RULE_ICE_CAVE;
@@ -1331,22 +1353,22 @@ static terrain_rule_t terrain_rule_for_player(int32_t player_index) {
     if (jungle && current_progress() >= PROGRESS_POST_PLANTERA) {
         return TERRAIN_RULE_POST_PLANTERA_JUNGLE;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_dungeon_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_dungeon_field)) {
         return TERRAIN_RULE_DUNGEON;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_corrupt_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_corrupt_field)) {
         return TERRAIN_RULE_CORRUPTION;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_crimson_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_crimson_field)) {
         return TERRAIN_RULE_CRIMSON;
     }
-    if (read_player_zone_flag(player_index, g_player_zone_hallow_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_hallow_field)) {
         return TERRAIN_RULE_HALLOW;
     }
     if (jungle) return TERRAIN_RULE_JUNGLE;
     if (snow) return TERRAIN_RULE_SNOW;
     if (desert) return TERRAIN_RULE_DESERT;
-    if (read_player_zone_flag(player_index, g_player_zone_beach_field)) {
+    if (read_player_zone_flag_instance(player, g_player_zone_beach_field)) {
         return TERRAIN_RULE_OCEAN;
     }
     if (rock) return TERRAIN_RULE_CAVE;
@@ -3188,17 +3210,11 @@ static void apply_legendary_movement(patch_handle_t instance, size_t index,
     }
 }
 
-/* This runs before the elite-instance filter. A world can contain no elite
- * NPCs for a while, but the player should still receive the rule summary and
- * terrain transition notices as soon as normal NPC AI is active. It performs
- * reads only; all combat mutation remains restricted to tracked elites. */
-static void update_world_rule_notices(void) {
-    int32_t local_player = -1;
-    if (!read_i32(g_main_my_player_field, NULL, &local_player) ||
-        local_player < 0 || local_player > 255) {
-        local_player = 0;
-    }
-
+/* Common notification path for both Main.Update and Player.Update.  The
+ * Player.Update hook supplies the real Player object, which avoids the
+ * fragile Main.player[] array access on Android IL2CPP builds. */
+static void update_world_rule_notices_for_instance(patch_handle_t player_instance) {
+    if (!player_instance || !patchlib_is_valid(player_instance)) return;
     bool game_menu = false;
     if (valid_field(g_main_game_menu_field, PATCH_BOOL) &&
         read_bool(g_main_game_menu_field, NULL, &game_menu) && game_menu) {
@@ -3210,8 +3226,6 @@ static void update_world_rule_notices(void) {
         return;
     }
 
-    patch_handle_t player_instance = NULL;
-    if (!get_player_instance(local_player, &player_instance)) return;
     bool active = true;
     bool dead = false;
     if (valid_field(g_player_active_field, PATCH_BOOL)) {
@@ -3241,7 +3255,43 @@ static void update_world_rule_notices(void) {
         g_world_notice_on_session_enter = false;
     }
     advance_world_rule_clock();
-    report_terrain_transition(terrain_rule_for_player(local_player));
+    report_terrain_transition(terrain_rule_for_player_instance(player_instance));
+}
+
+/* This remains as the Main.Update/AI compatibility path. */
+static void update_world_rule_notices(void) {
+    int32_t local_player = -1;
+    if (!read_i32(g_main_my_player_field, NULL, &local_player) ||
+        local_player < 0 || local_player > 255) {
+        local_player = 0;
+    }
+
+    patch_handle_t player_instance = NULL;
+    if (!get_player_instance(local_player, &player_instance)) return;
+    update_world_rule_notices_for_instance(player_instance);
+}
+
+/* Terraria normally calls Player.Update(int playerIndex) once per active
+ * player every frame.  Hooking this point makes terrain announcements
+ * independent from Main.player[] and also independent from whether any NPC
+ * exists in the world. */
+static void player_update_postfix(patch_handle_t instance, void **args,
+                                  void *result,
+                                  const patch_method_signature_t *sig_info) {
+    (void)result;
+    int32_t player_index = -1;
+    if (args && sig_info && tefstd_vector_size(&sig_info->arg_types) > 0 &&
+        args[0] && signature_arg_is(sig_info, 0, PATCH_INT32)) {
+        player_index = *(int32_t *)args[0];
+    }
+
+    int32_t local_player = -1;
+    (void)read_i32(g_main_my_player_field, NULL, &local_player);
+    if (local_player >= 0 && local_player <= 255 &&
+        player_index >= 0 && player_index != local_player) {
+        return;
+    }
+    update_world_rule_notices_for_instance(instance);
 }
 
 /* NPC.AI is not a reliable world/session clock: it may not run while the
@@ -3540,6 +3590,87 @@ static void discover_main_update_api(patch_handle_t main_type) {
               "Main update notification hook unavailable; using NPC AI fallback");
 }
 
+static bool install_player_update_hook(patch_handle_t method,
+                                       const char *name) {
+    if (!method || !patchlib_is_valid(method) ||
+        g_player_update_hook_count >= PLAYER_UPDATE_HOOK_LIMIT) {
+        return false;
+    }
+
+    patch_method_signature_t sig = {0};
+    if (!patchlib_method_get_signature(method, &sig)) return false;
+    size_t arg_count = tefstd_vector_size(&sig.arg_types);
+    bool supported = sig.is_instance && sig.return_type == PATCH_VOID &&
+                     (arg_count == 0 ||
+                      (arg_count == 1 && signature_arg_is(&sig, 0,
+                                                           PATCH_INT32)));
+    if (!supported) {
+        patchlib_method_signature_free(&sig);
+        return false;
+    }
+
+    patch_hook_id_t hook_id = patchlib_install_prepost_hook(
+        method, NULL, player_update_postfix);
+    if (hook_id == PATCH_HOOK_INVALID_ID) {
+        patchlib_method_signature_free(&sig);
+        return false;
+    }
+    g_player_update_hooks[g_player_update_hook_count++] = hook_id;
+    ELITE_LOG(MOD_LOG_LEVEL_INFO,
+              "Player update terrain hook installed: name=%s params=%d id=%d",
+              name, (int)arg_count, (int)hook_id);
+    patchlib_method_signature_free(&sig);
+    return true;
+}
+
+static void discover_player_update_api(patch_handle_t player_type) {
+    if (!player_type || !patchlib_is_valid(player_type)) return;
+
+    /* Current Terraria builds expose Player.Update(int). Keep the parameterless
+     * form as a compatibility option for builds that dispatch the index
+     * elsewhere. */
+    const int arg_counts[2] = {1, 0};
+    for (size_t i = 0; i < 2; ++i) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            player_type, "Update", arg_counts[i]);
+        if (install_player_update_hook(method, "Update")) return;
+    }
+
+    patch_handle_t method = patchlib_type_get_method(player_type, "Update");
+    if (install_player_update_hook(method, "Update")) return;
+
+    /* Metadata lookup can omit overloads. Enumerate the actual method table so
+     * a renamed overload is still found without guessing its address. */
+    tefstd_vector_t methods = {0};
+    if (!tefstd_vector_init(&methods, sizeof(patch_handle_t))) {
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Player.Update terrain hook method vector unavailable");
+        return;
+    }
+    if (!patchlib_type_get_methods(player_type, true, &methods)) {
+        tefstd_vector_destroy(&methods);
+        ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+                  "Player.Update terrain hook unavailable");
+        return;
+    }
+    size_t method_count = tefstd_vector_size(&methods);
+    for (size_t i = 0; i < method_count; ++i) {
+        patch_handle_t *entry = (patch_handle_t *)tefstd_vector_at(&methods, i);
+        patch_handle_t candidate = entry ? *entry : NULL;
+        const char *candidate_name = candidate && patchlib_is_valid(candidate)
+                                         ? patchlib_method_get_name(candidate)
+                                         : NULL;
+        if (candidate_name && strcmp(candidate_name, "Update") == 0 &&
+            install_player_update_hook(candidate, candidate_name)) {
+            tefstd_vector_destroy(&methods);
+            return;
+        }
+    }
+    tefstd_vector_destroy(&methods);
+    ELITE_LOG(MOD_LOG_LEVEL_WARNING,
+              "Player.Update terrain hook unavailable");
+}
+
 static void init_mod(kernel_mod_handle_t* handle) {
     (void)handle;
     srand((unsigned)(time(NULL) ^ (time_t)(uintptr_t)handle));
@@ -3569,6 +3700,10 @@ static void init_mod(kernel_mod_handle_t* handle) {
             }
         }
     }
+    patch_handle_t player_type = patchlib_type_get_type("Terraria", "Player");
+    if (player_type && patchlib_is_valid(player_type)) {
+        discover_player_update_api(player_type);
+    }
     (void)elite_should_spawn;
     (void)make_profile;
 }
@@ -3596,6 +3731,10 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
         patchlib_uninstall_hook(g_main_update_hooks[i]);
     }
     g_main_update_hook_count = 0;
+    for (size_t i = 0; i < g_player_update_hook_count; ++i) {
+        patchlib_uninstall_hook(g_player_update_hooks[i]);
+    }
+    g_player_update_hook_count = 0;
     for (size_t i = 0; i < g_loot_hook_count; ++i) {
         patchlib_uninstall_hook(g_loot_hooks[i]);
     }
@@ -3649,9 +3788,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090202,
+    .version_code = 2026090203,
     .api_version = 1,
-    .version = "1.3.6"
+    .version = "1.3.7"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
