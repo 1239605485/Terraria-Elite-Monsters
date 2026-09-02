@@ -478,7 +478,6 @@ static patch_handle_t g_npc_downed_plant_field = NULL;
 static patch_handle_t g_npc_downed_golem_field = NULL;
 static patch_handle_t g_npc_downed_moonlord_field = NULL;
 static patch_handle_t g_main_my_player_field = NULL;
-static patch_handle_t g_main_local_player_getter = NULL;
 static patch_handle_t g_field_type = NULL;
 static patch_handle_t g_field_position = NULL;
 static patch_handle_t g_field_life = NULL;
@@ -1009,18 +1008,6 @@ static bool get_player_instance(int32_t player_index, patch_handle_t *out_player
 
 static bool get_current_player_instance(patch_handle_t *out_player) {
     if (!out_player) return false;
-    *out_player = NULL;
-    if (g_main_local_player_getter &&
-        patchlib_is_valid(g_main_local_player_getter)) {
-        patch_handle_t player = NULL;
-        if (patchlib_method_invoke_args(g_main_local_player_getter,
-                                        PATCH_NULL, &player, NULL) &&
-            player && patchlib_is_valid(player)) {
-            *out_player = player;
-            return true;
-        }
-    }
-
     int32_t local_player = -1;
     if (!read_i32(g_main_my_player_field, NULL, &local_player) ||
         local_player < 0 || local_player > 255) {
@@ -3608,25 +3595,6 @@ static void init_mod(kernel_mod_handle_t* handle) {
             }
         }
     }
-    if (main_type && patchlib_is_valid(main_type)) {
-        patch_handle_t local_player_property =
-            patchlib_type_get_property(main_type, "LocalPlayer");
-        if (local_player_property && patchlib_is_valid(local_player_property)) {
-            patch_handle_t getter = patchlib_property_get_get_method(
-                local_player_property);
-            if (getter && patchlib_is_valid(getter)) {
-                patch_method_signature_t sig = {0};
-                if (patchlib_method_get_signature(getter, &sig) &&
-                    !sig.is_instance && sig.return_type == PATCH_OBJECT &&
-                    tefstd_vector_size(&sig.arg_types) == 0) {
-                    g_main_local_player_getter = getter;
-                    ELITE_LOG(MOD_LOG_LEVEL_INFO,
-                              "Main.LocalPlayer getter available; terrain reads use current instance");
-                }
-                patchlib_method_signature_free(&sig);
-            }
-        }
-    }
     (void)elite_should_spawn;
     (void)make_profile;
 }
@@ -3667,7 +3635,6 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
     }
     g_chest_hook_count = 0;
     g_main_game_mode_getter = NULL;
-    g_main_local_player_getter = NULL;
     g_main_zenith_world_field = NULL;
     g_main_new_text_method = NULL;
     g_main_new_text_arg_count = 0;
@@ -3708,9 +3675,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090205,
+    .version_code = 2026090206,
     .api_version = 1,
-    .version = "1.3.9"
+    .version = "1.4.0"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }
