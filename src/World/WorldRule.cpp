@@ -151,8 +151,9 @@ void em_world_rule_update(patch_handle_t instance, void **args, void *result,
             initialize_rules(identity);
         }
         g_world_active = true;
+        (void)em_notice_show("[精英变异] 世界规则状态层已激活");
         EM_WORLD_LOG(MOD_LOG_LEVEL_INFO,
-                     "World session active; passive rule effects and notices remain disabled");
+                     "World session active; passive rule effects remain disabled");
     }
 }
 

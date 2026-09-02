@@ -1,4 +1,4 @@
-# EliteMonsters 2.0.0-alpha4.3-safe-noui-terrain-hookfix 模块化增量验证版
+# EliteMonsters 2.0.0-alpha4.3-safe-noui-terrain-notice-test 模块化增量验证版
 
 本版本不是完整功能版，而是重构后的第一阶段验证包。它以原版代码为
 参考，保留旧的 `EliteMonsters/mod.c` 作为迁移参考，但 CMake 不再编译它。
@@ -9,7 +9,7 @@
 当前启用 Core、基础 NPC 属性增强和被动 WorldRule 状态层：普通敌怪有 20% 概率
 获得生命 ×1.4、伤害 ×1.15、防御 +4；友好 NPC、城镇 NPC 和 Boss 会跳过。进入
 世界后，WorldRule 仅依据 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，不执行
-任何规则效果。地形检测、聊天播报、Boss、AI、随机事件、奖励和投射物模块均关闭，
+任何规则效果。地形检测只记录状态，聊天模块仅执行一次受控测试播报，Boss、AI、随机事件、奖励和投射物模块均关闭，
 待真实 Android 设备完成启动、进入世界、退出世界、再次进入世界测试后逐项恢复。
 
 下方 1.3.x 功能说明是历史资料，不代表 2.0.0-alpha3 已启用的功能。
@@ -52,12 +52,13 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 2.0.0-alpha4.3-safe-noui-terrain-hookfix installs the minimal NPC `SetDefaults` hook plus
+Version 2.0.0-alpha4.3-safe-noui-terrain-notice-test installs the minimal NPC `SetDefaults` hook plus
 one signature-checked `Main.Update` hook for the passive WorldRule state layer.
 It additionally installs one signature-checked `Player.Update` hook for read-only
 Zone state logging; no terrain rule effect is executed.
-The entire UI/NewText path is disabled: startup does not discover `Main.NewText`,
-and the update callback emits no probe or world-entry message. It does not install
+The UI/NewText path is restricted to one fully signature-checked test message:
+startup checks only two known overload shapes, and the world callback emits one
+world-entry notice without a probe or terrain messages. It does not install
 AI, boss, event, reward, or other feature hooks. This is
 intentional: each later module will be enabled and tested independently.
 

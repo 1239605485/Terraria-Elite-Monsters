@@ -1,6 +1,6 @@
 # 模块化重构说明
 
-## 当前阶段：2.0.0-alpha4.3-safe-noui-terrain-hookfix
+## 当前阶段：2.0.0-alpha4.3-safe-noui-terrain-notice-test
 
 本阶段以原版工程为迁移参考，旧版单文件 `EliteMonsters/mod.c` 保留但不参与
 CMake 编译。新的编译入口是 `src/`。
@@ -13,14 +13,13 @@ CMake 编译。新的编译入口是 `src/`。
   3～5 条规则写入模块状态和日志；规则效果尚未启用。
 - `World/TerrainDetector.cpp`：只通过 `Player.Update` 读取可用的 `Zone*` 布尔字段，
   在地形状态变化时写入日志；不执行地形规则效果。
-- `UI/Notice.cpp`：保留模块接口但完全禁用；本阶段不发现、不创建、不调用
-  `Main.NewText` 或其他 UI 方法。
+- `UI/Notice.cpp`：只执行一次受控世界进入测试播报；不播报地形和规则内容。
 
 alpha3.1 修正 `Main.gameMenu` 按 `bool` 字段读取的问题；该字段不是 `int32`。
 alpha3.2 进一步将 `Main.Update` Hook 发现与这两个字段的可用性解耦，便于
 单独验证生命周期 Hook；字段不可用时只暂停 WorldRule 状态更新。
-alpha4～alpha4.3 的 `Main.NewText` 实验在本次闪退排查中回退；启动时不再枚举
-`Main.NewText`，`Main.Update` 回调也不发送 UI 探针或世界进入文本。
+alpha4～alpha4.3 的 UI 探针和复杂 `Main.NewText` 枚举已回退；当前只按两个已知
+签名形状检查一个 `Main.NewText` 重载，并在首次进入世界时发送一条测试文本。
 
 暂时不启用：
 
