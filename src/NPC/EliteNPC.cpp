@@ -72,10 +72,19 @@ void em_elite_npc_postfix(patch_handle_t instance, void **args, void *result,
         return;
     }
 
-    /* The first modular milestone intentionally has one simple, deterministic
-     * profile. Rules, terrain, AI, rewards and boss changes are not involved. */
+    /* Base elite profile. */
     em_field_write_i32(g_api->npc_life_max, instance, scaled_i32(life_max, 1.40f));
     em_field_write_i32(g_api->npc_life, instance, scaled_i32(life, 1.40f));
-    em_field_write_i32(g_api->npc_damage, instance, scaled_i32(damage, 1.15f));
+    float damage_multiplier = 1.15f;
+    bool day_time = true;
+    /* First gameplay rule batch: Night Hunt only changes elite damage at
+     * night. If the world rule or dayTime field is unavailable, do nothing. */
+    if (em_world_rule_active(1) &&
+        em_static_field_read_bool(g_api->main_day_time, &day_time) &&
+        !day_time) {
+        damage_multiplier *= 1.25f;
+    }
+    em_field_write_i32(g_api->npc_damage, instance,
+                       scaled_i32(damage, damage_multiplier));
     em_field_write_i32(g_api->npc_defense, instance, defense + 4);
 }

@@ -18,6 +18,8 @@ enum {
     WORLD_RULE_MAX_ACTIVE = 5
 };
 
+enum { WORLD_RULE_NIGHT_HUNT = 1 };
+
 static const char *const g_world_rule_names[WORLD_RULE_COUNT] = {
     "裂变回响", "夜行猎杀", "精英弹幕", "百杀敌潮", "Boss狂暴",
     "暴击震荡", "地下增殖", "宝箱增益", "濒死反击", "危险轮换"
@@ -116,6 +118,17 @@ void em_world_rule_set_hook_installed(bool installed) {
  * install the Main.Update hook. The callback separately requires the hook
  * flag, so a failed installation cannot leave the module active. */
 bool em_world_rule_enabled(void) { return g_enabled; }
+
+bool em_world_rule_active(int rule_id) {
+    if (!g_world_active || !g_rules_initialized ||
+        rule_id < 0 || rule_id >= WORLD_RULE_COUNT) {
+        return false;
+    }
+    for (int i = 0; i < g_active_rule_count; ++i) {
+        if (g_active_rules[i] == rule_id) return true;
+    }
+    return false;
+}
 
 void em_world_rule_update(patch_handle_t instance, void **args, void *result,
                           const patch_method_signature_t *sig_info) {

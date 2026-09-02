@@ -27,6 +27,7 @@ typedef struct em_game_api_t {
     patch_handle_t main_type_class;
     patch_handle_t main_game_menu;
     patch_handle_t main_world_id;
+    patch_handle_t main_day_time;
     patch_handle_t player_type_class;
     patch_handle_t player_zone_dungeon;
     patch_handle_t player_zone_corrupt;

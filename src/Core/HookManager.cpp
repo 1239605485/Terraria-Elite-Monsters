@@ -120,6 +120,10 @@ static void cache_main_api(void) {
     if (!g_api.main_world_id || !patchlib_is_valid(g_api.main_world_id)) {
         g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
     }
+    g_api.main_day_time = patchlib_type_get_field(main_type, "dayTime");
+    if (!g_api.main_day_time || !patchlib_is_valid(g_api.main_day_time)) {
+        g_api.main_day_time = patchlib_type_get_field(main_type, "DayTime");
+    }
 
 }
 
@@ -395,8 +399,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090411, 1,
-    "2.0.0-alpha4.3-safe-noui-terrain-rollback"
+    "eternal.future.elitemonsters", 2026090412, 1,
+    "2.0.0-alpha5-passive-rule-batch1"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }

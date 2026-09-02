@@ -1,6 +1,6 @@
 # Elite Monsters
 
-## 当前版本：2.0.0-alpha4.3-safe-noui-terrain-rollback 稳定回退版
+## 当前版本：2.0.0-alpha5-passive-rule-batch1 第一批世界规则效果
 
 当前交付物在 alpha2 稳定底座上新增被动 WorldRule 状态层和只读地形状态层：进入世界后按
 `Main.worldID` 确定性抽取 3～5 条规则并记录日志，但不执行规则效果。UI/NewText、地形
@@ -12,6 +12,7 @@ alpha3.1 修正了 `Main.gameMenu` 必须按 `bool` 静态字段读取的问题�
 alpha3.2 将 `Main.Update` Hook 的安装与字段可用性分开，先验证生命周期 Hook，
 再在回调中验证 `Main.gameMenu` 和 `Main.worldID`。
 alpha4～alpha4.3 的所有 UI 探针和 `Main.NewText` 调用均已回退，不执行任何文字播报。
+本版本只恢复“夜行猎杀”的夜间精英伤害加成；其他世界规则仍只保存状态。
 
 新的源码按 `src/Core`、`src/NPC`、`src/World`、`src/Boss`、`src/Event`、`src/UI`
 划分；`EliteMonsters/mod.c` 只作迁移参考，不参与 CMake 编译。详见
