@@ -141,6 +141,8 @@ static void cache_npc_api(patch_handle_t npc_type) {
         patchlib_type_get_field(npc_type, "knockBackResist");
 }
 
+static void discover_main_text_api(patch_handle_t main_type);
+
 static void cache_main_api(void) {
     patch_handle_t main_type =
         patchlib_type_get_type("Terraria", "Main");
@@ -159,63 +161,7 @@ static void cache_main_api(void) {
         g_api.main_world_id = patchlib_type_get_field(main_type, "WorldID");
     }
 
-    const int parameter_counts[] = {4, 1};
-    for (int parameter_count : parameter_counts) {
-        patch_handle_t method = patchlib_type_get_method_by_param_count(
-            main_type, "NewText", parameter_count);
-        if (!method || !patchlib_is_valid(method)) continue;
-
-        patch_method_signature_t signature = {};
-        if (!patchlib_method_get_signature(method, &signature)) continue;
-        size_t argument_count = tefstd_vector_size(&signature.arg_types);
-        patch_type_t *argument_type = nullptr;
-        if (argument_count > 0) {
-            argument_type = static_cast<patch_type_t *>(
-                tefstd_vector_at(&signature.arg_types, 0));
-        }
-        bool text_argument =
-            argument_type && (*argument_type == PATCH_OBJECT ||
-                              *argument_type == PATCH_POINTER);
-        bool supported = !signature.is_instance &&
-                         signature.return_type == PATCH_VOID &&
-                         ((parameter_count == 1 && argument_count == 1 &&
-                           text_argument) ||
-                          (parameter_count == 4 && argument_count == 4 &&
-                           text_argument));
-        bool color_supported = false;
-        bool int_color = false;
-        if (supported && parameter_count == 4) {
-            bool byte_color = true;
-            int_color = true;
-            for (size_t color_index = 1; color_index < 4; ++color_index) {
-                patch_type_t *color_type = static_cast<patch_type_t *>(
-                    tefstd_vector_at(&signature.arg_types, color_index));
-                byte_color = byte_color && color_type &&
-                             *color_type == PATCH_UINT8;
-                int_color = int_color && color_type &&
-                            *color_type == PATCH_INT32;
-            }
-            color_supported = byte_color || int_color;
-            supported = supported && color_supported;
-        }
-        if (supported) {
-            g_main_new_text_method = method;
-            g_main_new_text_arg_count = parameter_count;
-            g_main_new_text_color_type =
-                (parameter_count == 4 && color_supported && int_color)
-                    ? PATCH_INT32
-                    : PATCH_UINT8;
-        }
-        patchlib_method_signature_free(&signature);
-        if (supported) {
-            EM_LOG(MOD_LOG_LEVEL_INFO,
-                   "Main.NewText notice API available: params=%d colorType=%d",
-                   parameter_count, (int)g_main_new_text_color_type);
-            return;
-        }
-    }
-    EM_LOG(MOD_LOG_LEVEL_WARNING,
-           "Main.NewText notice API unavailable; UI Notice disabled");
+    discover_main_text_api(main_type);
 }
 
 static bool install_main_update_hook(patch_handle_t method,
@@ -248,6 +194,105 @@ static bool install_main_update_hook(patch_handle_t method,
            name, (int)tefstd_vector_size(&signature.arg_types), (int)hook_id);
     patchlib_method_signature_free(&signature);
     return true;
+}
+
+static bool is_text_argument(patch_type_t type) {
+    return type == PATCH_OBJECT || type == PATCH_POINTER;
+}
+
+static bool select_new_text_candidate(patch_handle_t method,
+                                      const char *source) {
+    if (!method || !patchlib_is_valid(method)) return false;
+
+    patch_method_signature_t signature = {};
+    if (!patchlib_method_get_signature(method, &signature)) return false;
+    size_t argument_count = tefstd_vector_size(&signature.arg_types);
+    const char *method_name = patchlib_method_get_name(method);
+    EM_LOG(MOD_LOG_LEVEL_INFO,
+           "Main.NewText candidate: source=%s name=%s params=%d instance=%d return=%d",
+           source ? source : "unknown", method_name ? method_name : "?",
+           (int)argument_count, signature.is_instance ? 1 : 0,
+           (int)signature.return_type);
+
+    bool supported = !signature.is_instance &&
+                     signature.return_type == PATCH_VOID &&
+                     (argument_count == 1 || argument_count == 4);
+    patch_type_t color_type = PATCH_UINT8;
+    if (supported) {
+        patch_type_t *text_type = static_cast<patch_type_t *>(
+            tefstd_vector_at(&signature.arg_types, 0));
+        supported = text_type && is_text_argument(*text_type);
+        if (supported && argument_count == 4) {
+            bool byte_color = true;
+            bool int_color = true;
+            for (size_t i = 1; i < 4; ++i) {
+                patch_type_t *color = static_cast<patch_type_t *>(
+                    tefstd_vector_at(&signature.arg_types, i));
+                byte_color = byte_color && color && *color == PATCH_UINT8;
+                int_color = int_color && color && *color == PATCH_INT32;
+            }
+            supported = byte_color || int_color;
+            if (int_color) color_type = PATCH_INT32;
+        }
+    }
+    if (supported) {
+        g_main_new_text_method = method;
+        g_main_new_text_arg_count = (int)argument_count;
+        g_main_new_text_color_type = color_type;
+    }
+    patchlib_method_signature_free(&signature);
+    return supported;
+}
+
+static void discover_main_text_api(patch_handle_t main_type) {
+    /* Parameter-count lookup is fast, but some IL2CPP metadata builds return
+     * only one overload or fail to expose an overload by count. Enumerating
+     * the method table is the authoritative fallback. */
+    const int parameter_counts[] = {4, 1};
+    for (int parameter_count : parameter_counts) {
+        patch_handle_t method = patchlib_type_get_method_by_param_count(
+            main_type, "NewText", parameter_count);
+        if (select_new_text_candidate(method, "param-count")) {
+            EM_LOG(MOD_LOG_LEVEL_INFO,
+                   "Main.NewText selected from parameter-count lookup: params=%d",
+                   parameter_count);
+            return;
+        }
+    }
+
+    tefstd_vector_t methods = {};
+    if (!tefstd_vector_init(&methods, sizeof(patch_handle_t))) {
+        EM_LOG(MOD_LOG_LEVEL_WARNING,
+               "Main.NewText method enumeration initialization failed");
+        return;
+    }
+
+    bool selected = false;
+    if (patchlib_type_get_methods(main_type, true, &methods)) {
+        size_t method_count = tefstd_vector_size(&methods);
+        for (size_t i = 0; i < method_count; ++i) {
+            patch_handle_t *entry = static_cast<patch_handle_t *>(
+                tefstd_vector_at(&methods, i));
+            patch_handle_t method = entry ? *entry : nullptr;
+            const char *name = method && patchlib_is_valid(method)
+                                   ? patchlib_method_get_name(method)
+                                   : nullptr;
+            if (!name || std::strcmp(name, "NewText") != 0) continue;
+            if (select_new_text_candidate(method, "enumeration")) {
+                selected = true;
+                break;
+            }
+        }
+    }
+    tefstd_vector_destroy(&methods);
+    if (selected) {
+        EM_LOG(MOD_LOG_LEVEL_INFO,
+               "Main.NewText selected from method enumeration: params=%d",
+               g_main_new_text_arg_count);
+        return;
+    }
+    EM_LOG(MOD_LOG_LEVEL_WARNING,
+           "Main.NewText notice API unavailable after overload enumeration");
 }
 
 static void discover_main_update_hook(void) {
@@ -385,7 +430,7 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090402, 1, "2.0.0-alpha4.1"
+    "eternal.future.elitemonsters", 2026090403, 1, "2.0.0-alpha4.2"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
