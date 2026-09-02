@@ -28,6 +28,7 @@ static bool g_enabled = false;
 static bool g_hook_installed = false;
 static bool g_world_active = false;
 static bool g_rules_initialized = false;
+static bool g_field_warning_logged = false;
 static uint32_t g_world_identity = 0;
 static uint32_t g_rng_state = 0;
 static int g_active_rule_count = 0;
@@ -77,12 +78,16 @@ static void initialize_rules(uint32_t world_identity) {
 
 void em_world_rule_initialize(const em_game_api_t *api) {
     g_api = api;
-    g_enabled = api &&
-                em_static_field_valid(api->main_game_menu, PATCH_BOOL) &&
-                em_static_field_valid(api->main_world_id, PATCH_INT32);
+    /* Hook discovery is intentionally independent from field discovery.
+     * Main.Update is the thing this milestone is validating; unavailable
+     * fields must only disable the passive state update, not hide whether the
+     * lifecycle hook itself can be installed. */
+    g_enabled = api && api->main_type_class &&
+                patchlib_is_valid(api->main_type_class);
     g_hook_installed = false;
     g_world_active = false;
     g_rules_initialized = false;
+    g_field_warning_logged = false;
     g_world_identity = 0;
     g_rng_state = 0;
     g_active_rule_count = 0;
@@ -90,10 +95,11 @@ void em_world_rule_initialize(const em_game_api_t *api) {
 
     if (g_enabled) {
         EM_WORLD_LOG(MOD_LOG_LEVEL_INFO,
-                     "WorldRule state module ready; waiting for Main.Update hook");
+                     "WorldRule state module ready; waiting for Main.Update hook; "
+                     "fields are validated at callback time");
     } else {
         EM_WORLD_LOG(MOD_LOG_LEVEL_WARNING,
-                     "WorldRule state module disabled: Main.gameMenu/worldID unavailable");
+                     "WorldRule state module disabled: Terraria.Main unavailable");
     }
 }
 
@@ -123,6 +129,12 @@ void em_world_rule_update(patch_handle_t instance, void **args, void *result,
     int32_t world_id = 0;
     if (!em_static_field_read_bool(g_api->main_game_menu, &game_menu) ||
         !em_static_field_read_i32(g_api->main_world_id, &world_id)) {
+        if (!g_field_warning_logged) {
+            EM_WORLD_LOG(MOD_LOG_LEVEL_WARNING,
+                         "WorldRule state update paused: Main.gameMenu/worldID "
+                         "fields unavailable or have unexpected types");
+            g_field_warning_logged = true;
+        }
         return;
     }
 

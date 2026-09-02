@@ -284,7 +284,7 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090304, 1, "2.0.0-alpha3.1"
+    "eternal.future.elitemonsters", 2026090305, 1, "2.0.0-alpha3.2"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
