@@ -247,7 +247,7 @@ static bool install_player_update_hook(patch_handle_t method, int parameter_coun
             g_player_update_hooks[g_player_update_hook_count++] = hook_id;
             EM_LOG(MOD_LOG_LEVEL_INFO,
                    "Terrain Player.Update hook installed: params=%d id=%d",
-                   parameter_count, (int)hook_id);
+                   (int)tefstd_vector_size(&signature.arg_types), (int)hook_id);
         }
     }
     patchlib_method_signature_free(&signature);
@@ -257,7 +257,7 @@ static bool install_player_update_hook(patch_handle_t method, int parameter_coun
 static void discover_player_update_hook(void) {
     if (!em_terrain_detector_enabled()) return;
     patch_handle_t player_type = g_api.player_type_class;
-    for (int parameter_count = 0; parameter_count <= 2; ++parameter_count) {
+    for (int parameter_count = 0; parameter_count <= 4; ++parameter_count) {
         patch_handle_t method = patchlib_type_get_method_by_param_count(
             player_type, "Update", parameter_count);
         if (install_player_update_hook(method, parameter_count)) {
@@ -265,6 +265,18 @@ static void discover_player_update_hook(void) {
             return;
         }
     }
+
+    /* Some Android IL2CPP metadata builds do not expose Update by parameter
+     * count even though the named method handle is valid. Reuse the same
+     * signature validation before installing the fallback. */
+    patch_handle_t fallback = patchlib_type_get_method(player_type, "Update");
+    if (install_player_update_hook(fallback, -1)) {
+        em_terrain_detector_set_hook_installed(true);
+        return;
+    }
+
+    EM_LOG(MOD_LOG_LEVEL_WARNING,
+           "Terrain Player.Update hook unavailable after count and name lookup");
     em_terrain_detector_set_hook_installed(false);
 }
 
@@ -383,8 +395,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090407, 1,
-    "2.0.0-alpha4.3-safe-noui-terrain-observe"
+    "eternal.future.elitemonsters", 2026090408, 1,
+    "2.0.0-alpha4.3-safe-noui-terrain-hookfix"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
