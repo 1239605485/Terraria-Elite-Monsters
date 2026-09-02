@@ -3229,9 +3229,6 @@ static void update_world_rule_notices(void) {
         return;
     }
 
-    elite_vector2_t player_position = {0.0f, 0.0f};
-    if (!read_player_state(local_player, &player_position, NULL, NULL)) return;
-
     if (!g_player_session_seen || !g_player_session_active) {
         if (g_player_session_seen) g_world_notice_on_session_enter = true;
         g_player_session_seen = true;
@@ -3652,9 +3649,9 @@ static void cleanup_mod(kernel_mod_handle_t* handle) {
 
 static kernel_mod_info_t g_info = {
     .pkg_id = "eternal.future.elitemonsters",
-    .version_code = 2026090201,
+    .version_code = 2026090202,
     .api_version = 1,
-    .version = "1.3.5"
+    .version = "1.3.6"
 };
 
 static kernel_mod_info_t* get_info(void) { return &g_info; }

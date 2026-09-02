@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.5 正式版（liuxin 双层变异规则版）
+# EliteMonsters 1.3.6 正式版（liuxin 双层变异规则版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -33,7 +33,7 @@ progress tier. Legendary elites have a 30% chance to add one random original
 environment crate; before hardmode the common branch is a Golden Crate, after
 hardmode it is a Titanium Crate, and the environment branch follows the target
 player's current biome. No custom item or non-vanilla material is added in this
-version. Version 1.3.5 also resolves the vanilla `Terraria.Main.NewText`
+version. Version 1.3.6 also resolves the vanilla `Terraria.Main.NewText`
 overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
@@ -60,7 +60,7 @@ cmake --build build --config Release --target EliteMonsters -j2
 ```
 
 The existing GitHub Actions workflow performs the same build and assembles the
-installable package. Version 1.3.5 hooks `Main.Update` for reliable world
+installable package. Version 1.3.6 hooks `Main.Update` for reliable world
 notifications and directly asks TEFKernel to hook the known parameterless
 `NPC.AI()` dispatcher as a fallback, installs an `NPC.NPCLoot` postfix for the
 rare progress reward and guaranteed legendary crate distribution (70% common,
@@ -69,7 +69,7 @@ primitive-argument `Item.NewItem` overload to create vanilla items safely.
 
 ## 双层变异实现
 
-Version 1.3.5 keeps a world-scoped list of 3--5 unique global rules and a
+Version 1.3.6 keeps a world-scoped list of 3--5 unique global rules and a
 per-tick terrain resolver driven by the target player's vanilla `Zone*`
 flags. The resolver prioritizes special sub-biomes (temple, spider,
 underworld, meteor, sky, mushroom, ice cave and underground desert) before
