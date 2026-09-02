@@ -1,4 +1,4 @@
-# EliteMonsters 1.3.8 正式版（liuxin 双层变异规则版）
+# EliteMonsters 1.3.9 正式版（liuxin 双层变异规则版）
 
 This version is authored by `liuxin`. The mod filters friendly, town, and boss
 NPCs, applies the configured world-mode chance, and prevents repeat
@@ -38,11 +38,9 @@ overload for world, terrain, and rotating-rule announcements, and drives the
 notification state from the `Terraria.Main.Update` game loop. The original
 `Terraria.NPC.AI` hook remains as a compatibility fallback without replacing
 vanilla AI behavior.
-Version 1.3.8 reads terrain flags from the `Player` instance in
-`Player.UpdateBiomes` rather than relying on `Main.player[]`; this keeps terrain
-announcements working when Android IL2CPP does not expose the static player
-array through the public array helper, without hooking the large
-`Player.Update` dispatcher.
+Version 1.3.9 does not install any Player method hook. It uses the verified
+Main.Update notification hook and resolves `Main.LocalPlayer` when that
+property is available, with the existing indexed-player fallback otherwise.
 
 All elites keep the local player as target. Legendary melee/charger enemies
 can teleport to the player's side on a cooldown, ranged/caster enemies make
