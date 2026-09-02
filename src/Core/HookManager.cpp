@@ -153,6 +153,21 @@ static void cache_player_api(void) {
     g_api.player_zone_meteor = patchlib_type_get_field(player_type, "ZoneMeteor");
     g_api.player_zone_temple =
         patchlib_type_get_field(player_type, "ZoneLihzhardian");
+    int valid_zone_fields = 0;
+    const patch_handle_t zone_fields[] = {
+        g_api.player_zone_dungeon, g_api.player_zone_corrupt,
+        g_api.player_zone_crimson, g_api.player_zone_jungle,
+        g_api.player_zone_snow, g_api.player_zone_desert, g_api.player_zone_beach,
+        g_api.player_zone_underworld, g_api.player_zone_hallow, g_api.player_zone_sky,
+        g_api.player_zone_forest, g_api.player_zone_rock_layer,
+        g_api.player_zone_dirt_layer, g_api.player_zone_glowshroom,
+        g_api.player_zone_spider, g_api.player_zone_meteor, g_api.player_zone_temple};
+    for (patch_handle_t field : zone_fields) {
+        if (em_field_valid(field, PATCH_BOOL)) ++valid_zone_fields;
+    }
+    EM_LOG(valid_zone_fields > 0 ? MOD_LOG_LEVEL_INFO : MOD_LOG_LEVEL_WARNING,
+           "Terrain metadata: Player discovered, valid Zone bool fields=%d/17",
+           valid_zone_fields);
 }
 
 static bool install_main_update_hook(patch_handle_t method,
@@ -332,6 +347,11 @@ static void init_mod(kernel_mod_handle_t *handle) {
     }
     discover_main_update_hook();
     discover_player_update_hook();
+    EM_LOG(em_terrain_detector_enabled() ? MOD_LOG_LEVEL_INFO
+                                         : MOD_LOG_LEVEL_WARNING,
+           "Terrain module final status: enabled=%d player_hook_count=%d",
+           em_terrain_detector_enabled() ? 1 : 0,
+           (int)g_player_update_hook_count);
     if (em_world_rule_enabled()) {
         EM_LOG(MOD_LOG_LEVEL_INFO,
                "Modular baseline loaded: Core + NPC + passive WorldRule state; "
@@ -363,8 +383,8 @@ static void cleanup_mod(kernel_mod_handle_t *handle) {
 }
 
 static kernel_mod_info_t g_info = {
-    "eternal.future.elitemonsters", 2026090406, 1,
-    "2.0.0-alpha4.3-safe-noui-terrain"
+    "eternal.future.elitemonsters", 2026090407, 1,
+    "2.0.0-alpha4.3-safe-noui-terrain-observe"
 };
 
 static kernel_mod_info_t *get_info(void) { return &g_info; }
