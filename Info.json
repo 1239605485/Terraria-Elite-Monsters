@@ -1,0 +1,27 @@
+{
+  "pkgId": "li06.originrewrite",
+  "name": "Origin Rewrite（起源重构）",
+  "author": "liuxin",
+  "version": "1.0.21-visual-fix",
+  "versionCode": 2026090422,
+  "brieflyDescribe": "Origin Rewrite 视觉标识修复版：通过 GivenName 属性回写并验证颜色标记。",
+  "description": "全新框架的最小垂直切片：SetDefaults 只记录待初始化与基准，首次 active=true 的 AI 回调执行 SpawnCommitted，只应用一次属性并输出 stat_write/readback 回读日志。AI 技能、掉落、世界规则、地形天气留待后续接入。",
+  "features": [],
+  "sizeCategory": "TINY",
+  "targetGameVersion": "1.4.5.6.4",
+  "minGameVersion": "1.4.4.0",
+  "maxGameVersion": "1.4.5.6.4",
+  "support": {
+    "android": { "arm64": true, "arm": false, "x64": false, "x86": false },
+    "windows": { "arm64": false, "arm": false, "x64": false, "x86": false },
+    "linux": { "arm64": false, "arm": false, "x64": false, "x86": false },
+    "mac": { "arm64": false, "arm": false, "x64": false, "x86": false },
+    "ios": { "arm64": false, "arm": false, "x64": false, "x86": false }
+  },
+  "dependence": [],
+  "conflicts": [],
+  "stableVerified": false,
+  "experimental": true,
+  "deprecated": false,
+  "hasExtendedContent": true
+}
